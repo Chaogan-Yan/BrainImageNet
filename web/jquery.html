@@ -1,0 +1,118 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>jquery页面加载特效</title>
+    <style type="text/css">
+        *
+        {
+            margin: 0;
+            padding: 0;
+            list-style-type: none;
+        }
+        a, img
+        {
+            border: 0;
+        }
+        .loading
+        {
+            margin: 100px auto 0 auto;
+            width: 400px;
+            text-align: center;
+            font-size: 18px;
+        }
+        .loading .action
+        {
+            text-decoration: none;
+            font-family: "微软雅黑" , "宋体";
+        }
+        .cover
+        {
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            left: 0;
+            z-index: 998;
+            width: 100%;
+            height: 100%;
+            _padding: 0 20px 0 0;
+            background: #f6f4f5;
+            display: none;
+        }
+        .showLoad
+        {
+            position: fixed;
+            top: 0;
+            left: 50%;
+            z-index: 9999;
+            opacity: 0;
+            filter: alpha(opacity=0);
+            margin-left: -80px;
+        }
+        *html, *html body
+        {
+            background-image: url(about:blank);
+            background-attachment: fixed;
+        }
+        *html .showLoad, *html .cover
+        {
+            position: absolute;
+            top: expression(eval(document.documentElement.scrollTop));
+        }
+        #ajaxLoad
+        {
+            border: 1px solid #8CBEDA;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        #ajaxLoad div.loadAll
+        {
+            width: 180px;
+            height: 50px;
+            line-height: 50px;
+            border: 2px solid #D6E7F2;
+            background: #fff;
+        }
+        #ajaxLoad img
+        {
+            margin: 10px 15px;
+            float: left;
+            display: inline;
+        }
+    </style>
+    <script type="text/javascript" src="js/jquery.min.js"></script>
+    <script type="text/javascript">
+        $(function () {
+            var hei = $(document).height();
+            $(".cover").css({ "height": hei });
+            $(".action").click(function () {
+                startWaiting();
+                setTimeout(function () {
+                    endWaiting();
+                }, 3000);
+            });
+        });
+        //开始加载
+        function startWaiting() {
+            $(".cover").css({ 'display': 'block', 'opacity': '0.8' });
+            $(".showLoad").stop(true).animate({ 'margin-top': '300px', 'opacity': '1' }, 200);
+        }
+        //结束加载
+        function endWaiting() {
+            $(".showLoad").stop(true).animate({ 'margin-top': '250px', 'opacity': '0' }, 400);
+            $(".cover").css({ 'display': 'none', 'opacity': '0' });
+        }
+    </script>
+</head>
+<body>
+<div class="loading">
+    <a class="action" href="javascript:void(0);" rel="external nofollow" >点击加载特效</a></div>
+<div class="cover">
+</div>
+<div id="ajaxLoad" class="showLoad">
+    <div class="loadAll">
+        <img src="images/waiting.gif">加载中，请稍候...</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,14 @@
+version: '3'
+
+services:
+        yannodeapp:
+                build: ./
+                volumes:
+                       
+                        - ./:/usr/local/mynodeapp
+                
+                working_dir: /usr/local/mynodeapp
+                command: node index.js
+
+                ports:
+                        - "8888:8888"

@@ -1,1 +1,3 @@
 # BrainImageNet
+
+This is the code and model for BrainImageNet: an Industrial-Grade Brain Imaging Based Deep Learning Classifier. We openly shared our trained model, code and framework (https://github.com/Chaogan-Yan/BrainImageNet), and built an online predicting website (http://brainimagenet.org:8088/) for whoever are interested in testing our classifier with brain imaging data from anybody and any scanner. There you can upload brain structural data (raw data or preprocessed gray matter density/volume data) to predict the sex or AD status of the participant(s). OF NOTE: FOR RESEARCH PURPOSE ONLY!
