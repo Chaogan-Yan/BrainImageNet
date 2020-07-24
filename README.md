@@ -26,7 +26,7 @@ You can predict the sex or AD status of the participant(s) based on their **prep
 
 **/Data/DPARSFPrecprocessed**: the input dir, should be:
 
-(1) The working dir of DPARSF (preprocessed by the DPARSF default parameter or DPARSF VBM parameter). There should be a '**T1ImgNewSegment**' folder under this directory. Please see more details for [DPARSF](http://rfmri.org/DPARSF) and [The R-fMRI Course](http://rfmri.org/Course).
+(1) The working dir of DPARSF (preprocessed by the DPARSF default parameter or DPARSF VBM parameter). There should be a '**T1ImgNewSegment**' folder under this directory. Please see more details for [DPARSF](http://rfmri.org/DPARSF) (Cited 2000+ times) and [The R-fMRI Course](http://rfmri.org/Course).
 
 (2) Alternatively, can be a directory of preprocessed gray matter density data (wc1) and gray matter volume data (mwc1). Under this directory, there were files as wc1XXXXX.nii and mwc1XXXXX.nii (XXXXX is subject ID). Please see an example of [DemoData_BrainImageNet](https://github.com/Chaogan-Yan/BrainImageNet/blob/master/data/DemoData_BrainImageNet.zip).
 
