@@ -21,6 +21,7 @@ Of note: as the prediction may take minutes (even tens of minutes depending on t
 You can predict the sex or AD status of the participant(s) based on their **preprocessed gray matter density/volume data** on your local machine. What you need to do is simply [installing docker](https://docs.docker.com/get-docker/), and then executing the following two commands.
 
 > docker pull cgyan/brainimagenet
+
 > docker run -ti --rm -v **/Data/DPARSFPrecprocessed**:/in -v **/Data/Results**:/out cgyan/brainimagenet
 
 **/Data/DPARSFPrecprocessed**: the input dir, should be:
