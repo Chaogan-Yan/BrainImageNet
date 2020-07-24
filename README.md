@@ -2,11 +2,11 @@
 
 Welcome to BrainImageNet: an Industrial-Grade Brain Imaging Based Deep Learning Classifier. 
 
-![](http://rfmri.org/sites/default/files/BrainImageNet.jpg)
+![ScreenShot](./web/images/index.jpg)
 
 We openly shared our [code/framework](https://github.com/Chaogan-Yan/BrainImageNet), trained model (within the below docker hub file, due to the filesize is too large for github), and built an [online predicting website](http://brainimagenet.org:8088/) for whoever are interested in testing our classifier to predict sex and AD status with brain imaging data from anybody and any scanner. 
 
-## 1. Predicting Online
+## 1. Predicting online
 Please visit our online predicting website ([http://brainimagenet.org:8088/](http://brainimagenet.org:8088/)).
 
 You can upload **preprocessed gray matter density/volume data** to predict the sex or AD status of the participant(s). Within this zip file, there should be files as wc1XXXXX.nii and mwc1XXXXX.nii (XXXXX is subject ID). Please see an example of [DemoData_BrainImageNet](https://github.com/Chaogan-Yan/BrainImageNet/blob/master/data/DemoData_BrainImageNet.zip).
