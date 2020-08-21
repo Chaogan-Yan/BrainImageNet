@@ -63,7 +63,7 @@ function start(response) {
         'letter-spacing: 1px;\n' +
         'font-family: Arial;">This is a website to demonstrate <strong>BrainImageNet: an Industrial-Grade Brain Imaging Based Deep Learning Classifier</strong>. We openly shared our trained model, code and framework (<a href="https://github.com/Chaogan-Yan/BrainImageNet"><strong>https://github.com/Chaogan-Yan/BrainImageNet</strong></a>), and here built an online predicting website for whoever are interested in testing our classifier with brain imaging data from anybody and any scanner. Please upload brain structural data (raw data or preprocessed gray matter density/volume data) to predict the sex of the participant(s). OF NOTE: FOR RESEARCH PURPOSE ONLY!\n</p>' +
         '<br>' +
-        '<p>1. Predicting sex by preprocessed gray matter density/volume data. This will significantly enhance the speed of prediction. Please preprocess your structural image to get the gray matter density data (wc1*) and gray matter volume data (mwc1*) by SPM or DPABI/DPARSF. The data required is NIfTI format (.nii or .nii.gz) in MNI space with a resolution of 91*109*91. The filenames should be wc1_XXXXX.nii(.gz) and mwc1_XXXXX.nii(.gz)  (XXXXX is subject ID). Please compress all of your files (could be many participants) in a single .zip file for uploading. Please see an example of <a href="https://github.com/Chaogan-Yan/BrainImageNet/blob/master/data/DemoData_BrainImageNet.zip"><strong>DemoData_BrainImageNet</strong></a>. As the prediction may take minutes (even tens of minutes depending on the number of participants), you can wait here or leave your email in the textbox to receive the prediction results from email attachment.</p>' +
+        '<p>1. Predicting sex by preprocessed gray matter density/volume data. This will significantly enhance the speed of prediction. Please preprocess your structural image to get the gray matter density data (wc1*) and gray matter volume data (mwc1*) by SPM or DPABI/DPARSF. The data required is NIfTI format (.nii or .nii.gz) in MNI space with a resolution of 91*109*91. The filenames should be wc1_XXXXX.nii(.gz) and mwc1_XXXXX.nii(.gz)  (XXXXX is subject ID). Please compress all of your files (could be many participants) in a single .zip file for uploading. Please see an example of <a href="https://github.com/Chaogan-Yan/BrainImageNet/blob/master/data/DemoData_BrainImageNet.zip"><strong>DemoData_BrainImageNet</strong></a>. As the prediction may take minutes (even tens of minutes depending on the number of participants), you can wait here or leave your email in the textbox to receive the prediction results from email attachment. MAX: 10 SUBJECTS!</p>' +
         '<br>' +
         '<input type="file" id="uploadfile" name="upload" multiple="multiple" accept="application/zip, application/gzip">' +
         '<input type="email" id="email1" name="emailaddress" multiple="multiple">' +
@@ -72,13 +72,13 @@ function start(response) {
         '<form action="/email2" enctype="multipart/form-data" ' +
         'method="post">' +
         '<br>' +
-        '<p>2. Predicting sex by raw T1 structural image. The data required is NIfTI format (.nii or .nii.gz). Please compress all of your files (could be many participants) in a single .zip file for uploading. As the prediction may take tens of minutes depending on the number of participants, you can wait here or leave your email in the textbox to receive the prediction results from email attachment.</p>' +
+        '<p>2. Predicting sex by raw T1 structural image. The data required is NIfTI format (.nii or .nii.gz). Please compress all of your files (could be many participants) in a single .zip file for uploading. As the prediction may take tens of minutes depending on the number of participants, you can wait here or leave your email in the textbox to receive the prediction results from email attachment. MAX: 10 SUBJECTS!</p>' +
         '<input type="file" id="upload" name="upload" multiple="multiple" accept="application/zip, application/gzip">' +
         '<input type="email" id="email2" name="emailaddress" multiple="multiple">' +
         '<input type="submit" value="Predict by T1" multiple="multiple"/>' +
         '</form>' +
         '<br>' +
-        '<p style="line-height: 2">For more information about our research, please visit <a href="http://yanlab.psych.ac.cn/">The R-fMRI Lab</a>.</p>' +
+        '<p style="line-height: 2">For more information about our research, please visit <a href="http://yanlab.psych.ac.cn/">The R-fMRI Lab</a>. Under patent protection, all rights reserved. For commercial use, please contact <a href="mailto:ycg.yan@gmail.com">Prof. Chao-Gan Yan</a>.</p>' +
         '</body>' +
         '</html>';
     response.writeHead(200, {"Content-Type": "text/html"});
@@ -118,7 +118,7 @@ function disease(response) {
         'letter-spacing: 1px;\n' +
         'font-family: Arial;">This is a website to demonstrate <strong>BrainImageNet: an Industrial-Grade Brain Imaging Based Deep Learning Classifier</strong>. We openly shared our trained model, code and framework (<a href="https://github.com/Chaogan-Yan/BrainImageNet"><strong>https://github.com/Chaogan-Yan/BrainImageNet</strong></a>), and here built an online predicting website for whoever are interested in testing our classifier with brain imaging data from anybody and any scanner. Please upload brain structural data (raw data or preprocessed gray matter density/volume data) to predict the Alzheimers Disease (AD) status of the participant(s). OF NOTE: FOR RESEARCH PURPOSE ONLY!\n</p>' +
         '<br>' +
-        '<p>1. Predicting Alzheimers Disease (AD) by preprocessed gray matter density/volume data. This will significantly enhance the speed of prediction. Please preprocess your structural image to get the gray matter density data (wc1*) and gray matter volume data (mwc1*) by SPM or DPABI/DPARSF. The data required is NIfTI format (.nii or .nii.gz) in MNI space with a resolution of 91*109*91. The filenames should be wc1_XXXXX.nii(.gz) and mwc1_XXXXX.nii(.gz)  (XXXXX is subject ID). Please compress all of your files (could be many participants) in a single .zip file for uploading. Please compress all of your files (could be many participants) in a single .zip file for uploading. Please see an example of <a href="https://github.com/Chaogan-Yan/BrainImageNet/blob/master/data/DemoData_BrainImageNet.zip"><strong>DemoData_BrainImageNet</strong></a>. As the prediction may take minutes (even tens of minutes depending on the number of participants), you can wait here or leave your email in the textbox to receive the prediction results from email attachment.</p>' +
+        '<p>1. Predicting Alzheimers Disease (AD) by preprocessed gray matter density/volume data. This will significantly enhance the speed of prediction. Please preprocess your structural image to get the gray matter density data (wc1*) and gray matter volume data (mwc1*) by SPM or DPABI/DPARSF. The data required is NIfTI format (.nii or .nii.gz) in MNI space with a resolution of 91*109*91. The filenames should be wc1_XXXXX.nii(.gz) and mwc1_XXXXX.nii(.gz)  (XXXXX is subject ID). Please compress all of your files (could be many participants) in a single .zip file for uploading. Please compress all of your files (could be many participants) in a single .zip file for uploading. Please see an example of <a href="https://github.com/Chaogan-Yan/BrainImageNet/blob/master/data/DemoData_BrainImageNet.zip"><strong>DemoData_BrainImageNet</strong></a>. As the prediction may take minutes (even tens of minutes depending on the number of participants), you can wait here or leave your email in the textbox to receive the prediction results from email attachment. MAX: 10 SUBJECTS!</p>' +
         '<br>' +
         '<input type="file" id="uploadfile" name="upload" multiple="multiple" accept="application/zip, application/gzip">' +
         '<input type="email" id="email1" name="emailaddress" multiple="multiple">' +
@@ -127,13 +127,13 @@ function disease(response) {
         '<form action="/email4" enctype="multipart/form-data" ' +
         'method="post">' +
         '<br>' +
-        '<p>2. Predicting Alzheimers Disease (AD) by raw T1 structural image. The data required is NIfTI format (.nii or .nii.gz). Please compress all of your files (could be many participants) in a single .zip file for uploading. As the prediction may take minutes (even tens of minutes depending on the number of participants), you can wait here or leave your email in the textbox to receive the prediction results from email attachment.</p>' +
+        '<p>2. Predicting Alzheimers Disease (AD) by raw T1 structural image. The data required is NIfTI format (.nii or .nii.gz). Please compress all of your files (could be many participants) in a single .zip file for uploading. As the prediction may take minutes (even tens of minutes depending on the number of participants), you can wait here or leave your email in the textbox to receive the prediction results from email attachment. MAX: 10 SUBJECTS!</p>' +
         '<input type="file" id="upload" name="upload" multiple="multiple" accept="application/zip, application/gzip">' +
         '<input type="email" id="email2" name="emailaddress" multiple="multiple">' +
         '<input type="submit" value="Predict by T1" multiple="multiple"/>' +
         '</form>' +
         '<br>' +
-        '<p style="line-height: 2">For more information about our research, please visit <a href="http://yanlab.psych.ac.cn/">The R-fMRI Lab</a>.</p>' +
+        '<p style="line-height: 2">For more information about our research, please visit <a href="http://yanlab.psych.ac.cn/">The R-fMRI Lab</a>. Under patent protection, all rights reserved. For commercial use, please contact <a href="mailto:ycg.yan@gmail.com">Prof. Chao-Gan Yan</a>.</p>' +
         '</body>' +
         '</html>';
     response.writeHead(200, {"Content-Type": "text/html"});

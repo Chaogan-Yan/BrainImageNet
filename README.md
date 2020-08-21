@@ -37,4 +37,4 @@ You can predict the sex or AD status of the participant(s) based on their **prep
 (2) AD_Prediction.txt: 1: AD 0: Healthy. (Prediction close to 1 means AD.) If you are using the results to screen AD risk, then a threshold of 0.3 is recommended (to increase sensitivity at a cost of specificity). OF NOTE: FOR RESEARCH PURPOSE ONLY!
  
 
-
+For more information about our research, please visit [The R-fMRI Lab](http://yanlab.psych.ac.cn). Under patent protection, all rights reserved. For commercial use, please contact [Prof. Chao-Gan Yan](mailto:ycg.yan@gmail.com).
