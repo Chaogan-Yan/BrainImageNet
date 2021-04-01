@@ -7,16 +7,21 @@ Created on Mon Feb 24 12:28:28 2020
 """
 
 
-from keras.optimizers import SGD
+from keras.optimizers import SGD, Adam
 import scipy.io as sio
 import os
 import tensorflow as tf
 from keras.layers import Dense, Dropout, Flatten, Conv3D, MaxPooling3D,AveragePooling3D, BatchNormalization
 from keras.models import load_model
 from keras import models,Input, Model, layers
+from keras import backend as K
 import nibabel as nib
 import numpy as np
+import matplotlib.pyplot as plt
 from keras.utils import multi_gpu_model
+from keras.models import Sequential
+from tensorflow.python.client import device_lib
+import random
 import keras.callbacks
 import math
 import glob
@@ -65,11 +70,10 @@ iFold = 0
 Step = 6
 OccSize = 12
 DataName = 'AD'
-Date = '20200602'
+Date = '20210106_0'
 Type = 'Trans' # Trans
 nGPU = 4
 batch_size = nGPU*12
-#nSubject = 500
 for iFold in range(iFold,iFold+1):
     PhenoInfo = sio.loadmat('/mnt/Data4/RfMRILab/Lubin/ContainerVolumes/TransferLearningProject/Data/D32_ADNI_1/Phenodata/Session1/AD_NC_Lfso_Fold'+str(iFold+1)+'.mat')
     SUbID = PhenoInfo['SUbID_Test']
@@ -94,7 +98,7 @@ for iFold in range(iFold,iFold+1):
     Mask = nib.load('/mnt/Data3/RfMRILab/Lubin/ContainerVolumes/Data/Reslice_GreyMask_02_91x109x91.img')
     Mask = Mask.get_data()  
                  
-    Data_Test = np.zeros(shape=(len(SubList_Test),96,120,86,2),dtype=np.float16)
+    Data_Test = np.zeros(shape=(len(SubList_Test),96,120,86,2))
                   
      # Load Testing Data  
     InputDir = '/mnt/Data4/RfMRILab/Lubin/ContainerVolumes/TransferLearningProject/Data/D32_ADNI_1/MR_Results/VBM/' 
@@ -118,7 +122,7 @@ for iFold in range(iFold,iFold+1):
     
     keras.backend.clear_session()
     with tf.device('/cpu:0'):
-        model = load_model('./Classifier_AD/20200504_Phase4_Trans_AD_IncepResN_lr0003_Lfso_Fold'+str(iFold)+'.h5')
+        model = load_model('/mnt/Data4/RfMRILab/Lubin/ContainerVolumes/TransferLearningProject/Model/20210106_0_Phase4_Trans_AD_IncepResN_lr0003_Lfso_Fold'+str(iFold)+'.h5')
     
     sgd = SGD(lr=0.0003, decay=2e-3, momentum=0.9, nesterov=True)
     parallel_model = multi_gpu_model(model, gpus=4)
@@ -135,7 +139,8 @@ for iFold in range(iFold,iFold+1):
                 Data_Occ = np.copy(Data_Test)
                 Data_Occ[:,i*Step:min(i*Step+OccSize,96),j*Step:min(j*Step+OccSize,120),k*Step:min(k*Step+OccSize,86),:] = 0
                 loss,acc = parallel_model.evaluate(Data_Occ[:nTest], Dx_Test[:nTest], batch_size=batch_size)    
-                OccMap[i,j,k] = acc0-acc
+                OccMap[i,j,k] = acc0-acc # for fold5
+#                OccMap[i,j,k] = 1-acc # for fold5
                 n += 1
                 print('Have down i-',str(i),' j-',str(j),' k-',str(k),', acc = ',str(np.round(acc*100,2)),'%.')
                 print('Have down ',str(np.round(n/n0*100,1)), '% of occlusion map!')
