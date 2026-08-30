@@ -1,0 +1,2778 @@
+---
+title: "AD_analysis_Dec2024"
+format: html
+editor: visual
+---
+
+# ROC
+
+## Whole Sample
+
+use the thresholds of youden-identified best cutoff (0.38) or the default 0.5
+
+ROC + calibration test
+
+```{r}
+# load packages
+pacman::p_load(pacman, dplyr, tidyr, pROC, ggplot2, ggthemes, caret, CalibrationCurves)
+
+# read data
+df_cros <- read.csv("xxxx/cross_data.csv")
+
+# select variables of interest; filter NC and AD
+df_filtered <- df_cros %>% 
+  select(ID, Diag_mk, sigmoid_risk_score, Age) %>% 
+  filter(Diag_mk %in% c("NC", "AD"))
+
+# calculate ROC curve
+roc <- roc(df_filtered$Diag_mk, df_filtered$sigmoid_risk_score, levels = c("NC", "AD"))
+
+# set a seed for replication
+set.seed(215)
+
+# calculate AUC & 95% CI
+auc_value <- round(auc(roc),3)
+ci_auc <- round(ci.auc(roc, method = "bootstrap", boot.n = 5000),3)
+
+print(paste("AUC:", auc_value))
+print(ci_auc)
+
+# identify best cutoff
+best_cutoff <- as.numeric(round(coords(roc, "best", ret = "threshold", best.method = "youden"),2))
+print(paste("Best Cutoff:", best_cutoff))
+
+
+# function to calculate classification performance with 95% CI
+get_classification_metrics <- function(data, threshold) {
+  data <- data %>% mutate(
+    predicted = if_else(sigmoid_risk_score > threshold, "AD", "NC"),
+    Diag_mk = factor(Diag_mk, levels = c("NC", "AD")),
+    predicted = factor(predicted, levels = c("NC", "AD"))
+  )
+  
+  cm <- confusionMatrix(data$predicted, data$Diag_mk, positive = "AD")
+  
+  TP <- sum(data$predicted == "AD" & data$Diag_mk == "AD")
+  TN <- sum(data$predicted == "NC" & data$Diag_mk == "NC")
+  FP <- sum(data$predicted == "AD" & data$Diag_mk == "NC")
+  FN <- sum(data$predicted == "NC" & data$Diag_mk == "AD")
+  
+  get_ci <- function(x, n) binom.test(x, n)$conf.int
+  
+  accuracy <- (TP + TN) / (TP + TN + FP + FN); accuracy_ci <- get_ci(TP + TN, TP + TN + FP + FN)
+  sensitivity <- TP / (TP + FN); sensitivity_ci <- get_ci(TP, TP + FN)
+  specificity <- TN / (TN + FP); specificity_ci <- get_ci(TN, TN + FP)
+  ppv <- TP / (TP + FP); ppv_ci <- get_ci(TP, TP + FP)
+  npv <- TN / (TN + FN); npv_ci <- get_ci(TN, TN + FN)
+  
+  data.frame(
+    Metric = c("Accuracy", "Sensitivity", "Specificity", "PPV", "NPV"),
+    Value = sprintf("%.3f", c(accuracy, sensitivity, specificity, ppv, npv)),
+    `95% CI` = c(
+      sprintf("%.3f–%.3f", accuracy_ci[1], accuracy_ci[2]),
+      sprintf("%.3f–%.3f", sensitivity_ci[1], sensitivity_ci[2]),
+      sprintf("%.3f–%.3f", specificity_ci[1], specificity_ci[2]),
+      sprintf("%.3f–%.3f", ppv_ci[1], ppv_ci[2]),
+      sprintf("%.3f–%.3f", npv_ci[1], npv_ci[2])
+    ),
+    row.names = NULL
+  )
+}
+
+
+# Youden-derived threshold
+results_youden <- get_classification_metrics(df_filtered, threshold = best_cutoff)
+
+print("Youden results (thereshold = 0.38)")
+print(results_youden)
+
+# default threshold
+results_050 <- get_classification_metrics(df_filtered, threshold = 0.50)
+
+print("thereshold = 0.50")
+print(results_050)
+
+
+# 95% CI
+ci <- round(ci.se(roc, specificities = seq(0, 1, length.out = 100), boot.n = 5000),3)
+
+# prepare ROC and CI data for plot
+roc_data <- data.frame(
+  Sensitivity = roc$sensitivities,
+  Specificity = roc$specificities
+) %>% 
+  arrange(desc(Specificity), Sensitivity)
+
+ci_data <- data.frame(
+  Specificity = as.numeric(row.names(ci)),
+  lower = ci[, "2.5%"],
+  upper = ci[, "97.5%"]
+)
+
+# plot by ggplot2
+ggplot() +
+  scale_x_continuous(expand = c(0.01, 0.01), limits = c(0, 1)) +
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(0, 1)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "royalblue3", alpha = 0.5) + 
+  geom_line(data = roc_data, aes(x = 1 - Specificity, y = Sensitivity), color = "royalblue3") +
+  geom_ribbon(data = ci_data, aes(x = 1 - Specificity, ymin = lower, ymax = upper), fill = "royalblue3", alpha = 0.2) +
+  labs(#title = "AD/NC Classifier ROC Curve with 95% CI", 
+       x = "1 - Specificity", y = "Sensitivity") +
+  geom_label(aes(x = 0.74, y = 0.11, label = paste("AD vs. NC", "\nAUC: ", auc_value, "[0.883, 0.940]")), fill = "royalblue3", color = "white", size = 6, label.size = NA, alpha=0.9, fontface = "bold", hjust = "middle") + 
+  theme_few()+
+  theme(
+    plot.title = element_text(size = 20, face = "bold", margin = margin(b=5), hjust = 0.5), 
+    axis.title = element_text(size = 18, face = "bold"), 
+    axis.title.x = element_text(margin = margin(t=5)),
+    axis.title.y = element_text(margin = margin(r=5)),
+    axis.text = element_text(size = 16), 
+  )
+
+
+ggsave("xxxx/ROC.png", dpi = 900, width = 8, height = 5, units = "in")
+
+# ============================
+# Standardized calibration (Van Calster et al. 2016)
+# ============================
+
+df_filtered <- df_filtered %>% 
+  mutate(y = if_else(Diag_mk == "AD", 1, 0))
+
+set.seed(215)
+
+png("xxxx/calibration_plot.png",
+    width = 8, height = 5, units = "in", res = 900)
+
+cal_result <- val.prob.ci.2(
+  p     = df_filtered$sigmoid_risk_score,
+  y     = df_filtered$y,
+  CL.smooth = TRUE,      
+  smooth = "loess",
+  logistic.cal = TRUE,   
+  g = 10,                
+  col.log = "black",      # logistic color
+  lwd.log = 1.5,
+  col.smooth = "grey50",    # loess colore
+  lwd.smooth = 2.5,
+  xlab = "Predicted risk (sigmoid score)",
+  ylab = "Observed proportion (AD)",
+  dostats = c("Intercept", "Slope", "Brier"),
+  legendloc = c(0.65, 0.45),
+  ylim = c(-0.15, 1),
+  line.bins = -0.07          # rug 
+)
+
+dev.off()
+
+args(val.prob.ci.2)
+```
+
+## Get Age-Matched Sample
+
+```{r}
+library(dplyr)
+library(readr)
+library(EnvStats) 
+
+#--------------------------------------------------------------------
+# 1. define match function
+#--------------------------------------------------------------------
+
+find_matched_subset <- function(group_df, 
+                                target_mean, 
+                                target_sd, 
+                                age_col = "Age", 
+                                id_col = "ID_visit_date", 
+                                n_iter = 50000,
+                                min_k = 5) {
+  
+  n_total <- nrow(group_df)
+  
+  if (n_total < min_k) {
+    message("warning: have not identified enough sample")
+    return(NULL)
+  }
+  
+  all_ages <- group_df[[age_col]]
+  all_ids <- group_df[[id_col]]
+  target_var <- target_sd^2
+  
+ # loop downward from the largest sample size
+  for (k in n_total:min_k) {
+    
+    if(k %% 5 == 0) message(paste("....trying k =", k))
+    
+    for (i in 1:n_iter) {
+      # 1. random sampling
+      sample_indices <- sample(1:n_total, k, replace = FALSE)
+      subset_ages <- all_ages[sample_indices]
+      
+      # 2. check variance (avoid error when variance is 0)
+      if (k > 1 && sd(subset_ages) == 0) next 
+      
+      # 3. test mean (t-test)
+      p_mean <- t.test(subset_ages, mu = target_mean)$p.value
+      
+      # 4. test variance (Chi-squared)
+      p_var <- EnvStats::varTest(subset_ages, sigma.squared = target_var)$p.value
+      
+      # 5. determine success (both p-values must be > 0.05)
+      if (p_mean > 0.05 && p_var > 0.05) {
+        message(paste(">>> Success! k =", k,
+                      "| Mean:", round(mean(subset_ages), 2), 
+                      "| SD:", round(sd(subset_ages), 2)))
+        return(all_ids[sample_indices]) # only return IDs; p-values are recalculated outside
+      }
+    }
+  }
+  return(NULL)
+}
+
+#--------------------------------------------------------------------
+# Step 2: Set targets & load data
+#--------------------------------------------------------------------
+
+# set seed
+set.seed(215)
+
+# target statistics
+target_ad_mean <- 75.97
+target_ad_sd   <- 7.85
+target_nc_mean <- 76.08
+target_nc_sd   <- 6.53
+
+
+validation_file_path <- "xxxx/cross_data.csv" 
+val_data_full <- read_csv(validation_file_path)
+
+val_ad <- val_data_full %>% filter(Diag_mk == "AD")
+val_nc <- val_data_full %>% filter(Diag_mk == "NC")
+
+#--------------------------------------------------------------------
+# # Step 3: Run matching
+#--------------------------------------------------------------------
+message("--- Matching AD ---")
+matched_ad_ids <- find_matched_subset(val_ad, target_ad_mean, target_ad_sd)
+message("--- Matching NC ---")
+matched_nc_ids <- find_matched_subset(val_nc, target_nc_mean, target_nc_sd)
+
+#--------------------------------------------------------------------
+# Step 4: Compute final p-values and output results
+#--------------------------------------------------------------------
+
+if (!is.null(matched_ad_ids) && !is.null(matched_nc_ids)) {
+  
+  # extract final data
+  final_df <- val_data_full %>% 
+    filter(ID_visit_date %in% c(matched_ad_ids, matched_nc_ids))
+  
+
+  final_ad_subset <- final_df %>% filter(Diag_mk == "AD")
+  final_nc_subset <- final_df %>% filter(Diag_mk == "NC")
+  
+  # 2. compute AD statistics and p-values
+  ad_mean_val <- mean(final_ad_subset$Age)
+  ad_sd_val   <- sd(final_ad_subset$Age)
+  
+  ad_p_mean <- t.test(final_ad_subset$Age, mu = target_ad_mean)$p.value
+  ad_p_var  <- EnvStats::varTest(final_ad_subset$Age, sigma.squared = target_ad_sd^2)$p.value
+  
+  # 3. compute NC statistics and p-values
+  nc_mean_val <- mean(final_nc_subset$Age)
+  nc_sd_val   <- sd(final_nc_subset$Age)
+  
+  nc_p_mean <- t.test(final_nc_subset$Age, mu = target_nc_mean)$p.value
+  nc_p_var  <- EnvStats::varTest(final_nc_subset$Age, sigma.squared = target_nc_sd^2)$p.value
+  
+  # 4. build summary table
+  summary_table <- data.frame(
+    Group = c("AD", "NC"),
+    N = c(nrow(final_ad_subset), nrow(final_nc_subset)),
+    Match_Mean = round(c(ad_mean_val, nc_mean_val), 2),
+    Target_Mean = c(target_ad_mean, target_nc_mean),
+    P_Value_Mean = round(c(ad_p_mean, nc_p_mean), 3), 
+    Match_SD = round(c(ad_sd_val, nc_sd_val), 2),
+    Target_SD = c(target_ad_sd, target_nc_sd),
+    P_Value_Var = round(c(ad_p_var, nc_p_var), 3)     
+  )
+  
+  # 5. print and save
+  
+  message("\n================ Final Matching Results ================")
+  print(summary_table)
+  message("================================================")
+
+  # save the specific ID list
+  write_csv(final_df, "xxxx/matched_age_result.csv")
+  
+  # save the summary statistics table
+  write_csv(summary_table, "xxxx/matched_stats_summary.csv")
+  
+  message("Files saved.")
+  
+} else {
+  message("Matching failed, no result generated.")
+}
+```
+
+## Subject-level sample
+
+```{r}
+
+library(dplyr)
+
+dat <- read.csv("/Users/chenyanrong_1/Desktop/Desktop_Yanrong_Later/Project/AD/updated_diagnosis/202410_revisit_by_R/cross-sectional/cross_data.csv")
+
+dat_max_visit <- dat %>%
+  group_by(ID) %>%
+  slice_max(order_by = visit_sequence, n = 1) %>% 
+  ungroup()
+
+write_csv(dat_max_visit,"xxxx/cross_data_last_visit.csv")
+```
+
+## ROC-sub sample
+
+```{r}
+# load packages
+pacman::p_load(pacman, dplyr, tidyr, pROC, ggplot2, ggthemes, caret)
+
+# read data (change the data as you need, e.g., the age matched sample or the subject-level sample)
+df_cros <- read.csv("xxxx/matched_age_result.csv")
+
+# select variables of interest; filter NC and AD
+df_filtered <- df_cros %>% 
+  select(ID, Diag_mk, sigmoid_risk_score, Age) %>% 
+  filter(Diag_mk %in% c("NC", "AD"))
+
+# calculate ROC curve
+roc <- roc(df_filtered$Diag_mk, df_filtered$sigmoid_risk_score, levels = c("NC", "AD"))
+
+# set a seed for replication
+set.seed(215)
+
+# calculate AUC & 95% CI
+auc_value <- round(auc(roc),3)
+ci_auc <- round(ci.auc(roc, method = "bootstrap", boot.n = 5000),3)
+
+print(paste("AUC:", auc_value))
+print(ci_auc)
+
+# identify best cutoff
+best_cutoff <- as.numeric(round(coords(roc, "best", ret = "threshold", best.method = "youden"),2))
+print(paste("Best Cutoff:", best_cutoff))
+
+# function to calculate classification performance with 95% CI
+get_classification_metrics <- function(data, threshold) {
+  data <- data %>% mutate(
+    predicted = if_else(sigmoid_risk_score > threshold, "AD", "NC"),
+    Diag_mk = factor(Diag_mk, levels = c("NC", "AD")),
+    predicted = factor(predicted, levels = c("NC", "AD"))
+  )
+  
+  cm <- confusionMatrix(data$predicted, data$Diag_mk, positive = "AD")
+  
+  TP <- sum(data$predicted == "AD" & data$Diag_mk == "AD")
+  TN <- sum(data$predicted == "NC" & data$Diag_mk == "NC")
+  FP <- sum(data$predicted == "AD" & data$Diag_mk == "NC")
+  FN <- sum(data$predicted == "NC" & data$Diag_mk == "AD")
+  
+  get_ci <- function(x, n) binom.test(x, n)$conf.int
+  
+  accuracy <- (TP + TN) / (TP + TN + FP + FN); accuracy_ci <- get_ci(TP + TN, TP + TN + FP + FN)
+  sensitivity <- TP / (TP + FN); sensitivity_ci <- get_ci(TP, TP + FN)
+  specificity <- TN / (TN + FP); specificity_ci <- get_ci(TN, TN + FP)
+  ppv <- TP / (TP + FP); ppv_ci <- get_ci(TP, TP + FP)
+  npv <- TN / (TN + FN); npv_ci <- get_ci(TN, TN + FN)
+  
+  data.frame(
+    Metric = c("Accuracy", "Sensitivity", "Specificity", "PPV", "NPV"),
+    Value = sprintf("%.3f", c(accuracy, sensitivity, specificity, ppv, npv)),
+    `95% CI` = c(
+      sprintf("%.3f–%.3f", accuracy_ci[1], accuracy_ci[2]),
+      sprintf("%.3f–%.3f", sensitivity_ci[1], sensitivity_ci[2]),
+      sprintf("%.3f–%.3f", specificity_ci[1], specificity_ci[2]),
+      sprintf("%.3f–%.3f", ppv_ci[1], ppv_ci[2]),
+      sprintf("%.3f–%.3f", npv_ci[1], npv_ci[2])
+    ),
+    row.names = NULL
+  )
+}
+
+
+results_sublevel <- get_classification_metrics(df_filtered, threshold = best_cutoff)
+
+print("sublevel results (best youden thereshold = 0.38)")
+print(results_sublevel)
+
+
+# 95% CI
+ci <- round(ci.se(roc, specificities = seq(0, 1, length.out = 100), boot.n = 5000),3)
+
+# prepare ROC and CI data for plot
+roc_data <- data.frame(
+  Sensitivity = roc$sensitivities,
+  Specificity = roc$specificities
+)%>% 
+ arrange(desc(Specificity), Sensitivity)
+
+ci_data <- data.frame(
+  Specificity = as.numeric(row.names(ci)),
+  lower = ci[, "2.5%"],
+  upper = ci[, "97.5%"]
+)
+
+# plot by ggplot2
+ggplot() +
+  scale_x_continuous(expand = c(0.01, 0.01), limits = c(0, 1)) +
+  scale_y_continuous(expand = c(0.01, 0.01), limits = c(0, 1)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "royalblue3", alpha = 0.5) + 
+  geom_line(data = roc_data, aes(x = 1 - Specificity, y = Sensitivity), color = "royalblue3")+
+  geom_ribbon(data = ci_data, aes(x = 1 - Specificity, ymin = lower, ymax = upper), fill = "royalblue3", alpha = 0.2) +
+  labs(#title = "AD/NC Classifier ROC Curve with 95% CI",
+       x = "1 - Specificity", y = "Sensitivity") +
+  geom_label(aes(x = 0.74, y = 0.11, label = paste("AD vs. NC", "\nAUC: ", auc_value, "[0.876, 0.940]")), fill = "royalblue3", color = "white", size = 6, label.size = NA, alpha=0.9, fontface = "bold", hjust = "middle") + 
+  theme_few()+
+  theme(
+    plot.title = element_text(size = 20, face = "bold", margin = margin(b=5), hjust = 0.5), 
+    axis.title = element_text(size = 18, face = "bold"), 
+    axis.title.x = element_text(margin = margin(t=5)),
+    axis.title.y = element_text(margin = margin(r=5)),
+    axis.text = element_text(size = 16), 
+  )
+
+
+ggsave("xxxx/ROC_age_matched.png", dpi = 900, width = 8, height = 5, units = "in")
+```
+
+# Comparing linear risk scores across diagnoses
+
+## Session-level
+
+```{r}
+library(dplyr)
+library(ggthemes)
+library(emmeans)
+library(lmerTest)
+library(lme4)
+library(ggplot2)
+library(ggforce)
+library(ggsignif)
+library(gt)
+
+# read data
+df_cros <- read.csv("xxxx/cross-sectional/cross_data.csv")
+
+############## Handling Categorical Variables ##################
+# Handling Sex
+df_cros <- df_cros %>%
+  mutate(Sex = ifelse(Sex == 2, 1, 0)) # # Convert Sex to a binary variable with 1 for Female and 0 for Male
+
+# Diag_final variables sorted by severity
+df_cros$Diag_mk <- factor(df_cros$Diag_mk, levels = c("AD", "MCI", "SCD", "NC"))
+
+# Create levels for the diagnostic group
+diag_levels <- levels(df_cros$Diag_mk)
+
+# Specify colors for each diagnostic group
+custom_colors <- c("NC" = "green4", "SCD" = "dodgerblue3", "MCI" = "goldenrod2", "AD" = "brown2")
+
+############## Linear Mixed Effects Modeling ##################
+# Build the model
+model <- lmer(linear_risk_score ~ Diag_mk + Sex + Age + Education + (1 | ID), data = df_cros)
+
+# View model summary
+summary(model)
+anova(model) # when using lmerTest package, this code would give you type3 ss
+
+############## Post hoc comparison ##################
+# Get emmeans results
+emmeans_results <- emmeans(model, pairwise ~ Diag_mk, lmer.df = "satterthwaite")
+
+summary(emmeans_results)
+
+# Get summary and convert to dataframe
+(emmeans_summary_df <- as.data.frame(summary(emmeans_results$contrasts)))
+
+gt(emmeans_summary_df)
+
+# Use scientific notation on p.value column and keep 3 decimal places
+(emmeans_summary_df$p.value <- formatC(emmeans_summary_df$p.value, format = "e", digits = 2))
+
+# Keep 2 decimal places for other value columns
+emmeans_summary_df <- emmeans_summary_df %>%
+  mutate_if(is.numeric, ~ round(., 2))
+
+# Rearrange the dataframes in order of comparison
+# Order of comparisons: AD vs NC, AD vs SCD, AD vs MCI, MCI vs NC, MCI vs SCD, SCD vs NC
+
+comparisons_order <- c("AD - NC", "AD - SCD", "AD - MCI", "MCI - NC", "MCI - SCD", "SCD - NC")
+emmeans_summary_df <- emmeans_summary_df[match(comparisons_order, emmeans_summary_df$contrast), ]
+emmeans_summary_df
+
+# Replace 'e' in the p-value with '*10^' and process the scientific notation format to a format suitable for parsing
+emmeans_summary_df$p_value_label <- ifelse(as.numeric(emmeans_summary_df$p.value) < 0.05, 
+                                           paste0("p < ", gsub("e", " %*% 10^", emmeans_summary_df$p.value)), 
+                                           "n.s.")
+
+# Remove leading zeros from the positive signs and indices, and prepare superscript formatting
+emmeans_summary_df$p_value_label <- gsub("\\+0*([1-9])", "\\1", emmeans_summary_df$p_value_label)
+emmeans_summary_df$p_value_label <- gsub("\\^(-?)0*", "^\\1", emmeans_summary_df$p_value_label)
+
+emmeans_summary_df$p_value_label_star <- ifelse(as.numeric(emmeans_summary_df$p.value) < 0.001, "***",
+                                  ifelse(as.numeric(emmeans_summary_df$p.value) < 0.01, "**",
+                                  ifelse(as.numeric(emmeans_summary_df$p.value) < 0.05, "*", "n.s.")))
+
+
+gt(emmeans_summary_df)
+
+##################### Visualization ##################
+# Diag_final variables sorted in desired order
+df_cros$Diag_mk <- factor(df_cros$Diag_mk, levels = c("NC", "SCD", "MCI", "AD"))
+
+
+# Plot sina and assign colors
+p <- ggplot(df_cros, aes(x = Diag_mk, y = linear_risk_score)) +
+  geom_sina(aes(color = Diag_mk), size = 2, alpha = 0.7) +
+  geom_boxplot(aes(fill = Diag_mk), width = 0.3, alpha = 0.3, outlier.shape = NA, color = "black") +
+  scale_color_manual(values = custom_colors) +
+  scale_fill_manual(values = custom_colors) +
+  labs(#title = "MRI-Based Risk Scores Across Different Diagnoses",
+       x = NULL,
+       y = "Risk Score") +
+  scale_y_continuous(limits = c(-7.5, 17), breaks = seq(-5, 15, by = 5))+
+  theme_few() +
+  theme(legend.position = "none",
+        plot.title = element_text(size = 20, face = "bold", margin = margin(b=5)),
+        axis.text.x = element_text(size = 18, face = "bold", margin = margin(t=5), colour = "black"),  
+        axis.text.y = element_text(size = 16), 
+        axis.title.y = element_text(size = 18, face = "bold", margin = margin(r=5))) 
+
+# Create a list of comparison groups, in the specified order
+comparisons_star <- list(c("AD", "NC"), c("AD", "SCD"), c("AD", "MCI"), 
+                    c("MCI", "NC"), c("MCI", "SCD"), c("NC", "SCD"))
+
+
+# Filter out rows where p_value_label_star is not equal to “n.a”.
+emmeans_summary_df_star <- emmeans_summary_df[emmeans_summary_df$p_value_label_star != "n.s.", ]
+
+# Use the filtered p_value_label_star as markers
+p <- p + geom_signif(comparisons = comparisons_star, 
+                     annotations = paste0("bold('", emmeans_summary_df_star$p_value_label_star, "')"),
+                     y_position = c(15, 12.5, 7.5, 10, 7.5, 7.5),  
+                     color = "gray50",
+                     size = 0.5, 
+                     textsize = 12, 
+                     vjust = 0.5, 
+                     parse = TRUE)
+p
+
+ggsave("xxxxx/sina_plot.png", dpi = 900, width = 8, height = 5, units = "in")
+```
+
+## Subject-level
+
+```{r}
+
+# load package
+library(dplyr)
+library(ggthemes)
+library(emmeans)
+library(ggplot2)
+library(ggforce)
+library(ggsignif)
+library(gt)
+library(car) # for type 3 ss when using lm
+
+# read data
+df_cros <- read.csv("xxxxx/cross_data_last_visit.csv")
+## change the dataset accordingly when you need to run subject-level
+
+
+############## Handling Categorical Variables ##################
+# Handling Sex
+df_cros <- df_cros %>%
+  mutate(Sex = ifelse(Sex == 2, 1, 0)) # # Convert Sex to a binary variable with 1 for Female and 0 for Male
+
+# Diag_final variables sorted by severity
+df_cros$Diag_mk <- factor(df_cros$Diag_mk, levels = c("AD", "MCI", "SCD", "NC"))
+
+# Create levels for the diagnostic group
+diag_levels <- levels(df_cros$Diag_mk)
+
+# Specify colors for each diagnostic group
+custom_colors <- c("NC" = "green4", "SCD" = "dodgerblue3", "MCI" = "goldenrod2", "AD" = "brown2")
+
+############## Linear Mixed Effects Modeling ##################
+# Build the model
+model <- lm(linear_risk_score ~ Diag_mk + Sex + Age + Education, data = df_cros)
+
+# View model summary
+summary(model)
+Anova(model, type = 3) # when using lm, do use Anova in car package and set the type3 mannually
+
+############## Post hoc comparison ##################
+# Get emmeans results
+# when you want to do it at session-level
+# emmeans_results <- emmeans(model, pairwise ~ Diag_mk, lmer.df = "satterthwaite")
+# when you want to do it at subject-level
+emmeans_results <- emmeans(model, pairwise ~ Diag_mk)
+
+
+summary(emmeans_results)
+
+# Get summary and convert to dataframe
+(emmeans_summary_df <- as.data.frame(summary(emmeans_results$contrasts)))
+
+gt(emmeans_summary_df)
+
+# Use scientific notation on p.value column and keep 3 decimal places
+(emmeans_summary_df$p.value <- formatC(emmeans_summary_df$p.value, format = "e", digits = 2))
+
+# Keep 2 decimal places for other value columns
+emmeans_summary_df <- emmeans_summary_df %>%
+  mutate_if(is.numeric, ~ round(., 2))
+
+# Rearrange the dataframes in order of comparison
+# Order of comparisons: AD vs NC, AD vs SCD, AD vs MCI, MCI vs NC, MCI vs SCD, SCD vs NC
+
+comparisons_order <- c("AD - NC", "AD - SCD", "AD - MCI", "MCI - NC", "MCI - SCD", "SCD - NC")
+emmeans_summary_df <- emmeans_summary_df[match(comparisons_order, emmeans_summary_df$contrast), ]
+emmeans_summary_df
+
+# Replace 'e' in the p-value with '*10^' and process the scientific notation format to a format suitable for parsing
+emmeans_summary_df$p_value_label <- ifelse(as.numeric(emmeans_summary_df$p.value) < 0.05, 
+                                           paste0("p < ", gsub("e", " %*% 10^", emmeans_summary_df$p.value)), 
+                                           "n.s.")
+
+# Remove leading zeros from the positive signs and indices, and prepare superscript formatting
+emmeans_summary_df$p_value_label <- gsub("\\+0*([1-9])", "\\1", emmeans_summary_df$p_value_label)
+emmeans_summary_df$p_value_label <- gsub("\\^(-?)0*", "^\\1", emmeans_summary_df$p_value_label)
+
+emmeans_summary_df$p_value_label_star <- ifelse(as.numeric(emmeans_summary_df$p.value) < 0.001, "***",
+                                  ifelse(as.numeric(emmeans_summary_df$p.value) < 0.01, "**",
+                                  ifelse(as.numeric(emmeans_summary_df$p.value) < 0.05, "*", "n.s.")))
+
+
+gt(emmeans_summary_df)
+
+##################### Visualization ##################
+# Diag_final variables sorted in desired order
+df_cros$Diag_mk <- factor(df_cros$Diag_mk, levels = c("NC", "SCD", "MCI", "AD"))
+
+
+# Plot sina and assign colors
+p <- ggplot(df_cros, aes(x = Diag_mk, y = linear_risk_score)) +
+  geom_sina(aes(color = Diag_mk), size = 2, alpha = 0.7) +
+  geom_boxplot(aes(fill = Diag_mk), width = 0.3, alpha = 0.3, outlier.shape = NA, color = "black") +
+  scale_color_manual(values = custom_colors) +
+  scale_fill_manual(values = custom_colors) +
+  labs(#title = "MRI-Based Risk Scores Across Different Diagnoses",
+       x = NULL,
+       y = "Risk Score") +
+  scale_y_continuous(limits = c(-7.5, 17), breaks = seq(-5, 15, by = 5))+
+  theme_few() +
+  theme(legend.position = "none",
+        plot.title = element_text(size = 20, face = "bold", margin = margin(b=5)),
+        axis.text.x = element_text(size = 18, face = "bold", margin = margin(t=5), colour = "black"),  
+        axis.text.y = element_text(size = 16), 
+        axis.title.y = element_text(size = 18, face = "bold", margin = margin(r=5))) 
+
+# Create a list of comparison groups, in the specified order
+comparisons_star <- list(c("AD", "NC"), c("AD", "SCD"), c("AD", "MCI"), 
+                    c("MCI", "NC"), c("MCI", "SCD"), c("NC", "SCD"))
+
+
+# Filter out rows where p_value_label_star is not equal to “n.a”.
+emmeans_summary_df_star <- emmeans_summary_df[emmeans_summary_df$p_value_label_star != "n.s.", ]
+
+# Use the filtered p_value_label_star as markers
+p <- p + geom_signif(comparisons = comparisons_star, 
+                     annotations = paste0("bold('", emmeans_summary_df_star$p_value_label_star, "')"),
+                     y_position = c(15, 12.5, 7.5, 10, 7.5, 7.5),  
+                     color = "gray50",
+                     size = 0.5, 
+                     textsize = 12, 
+                     vjust = 0.5, 
+                     parse = TRUE)
+p
+
+ggsave("xxxx/sina_plot_subject_level.png", dpi = 900, width = 8, height = 5, units = "in")
+```
+
+# Survival Analysis
+
+## Sigmoid
+
+```{r}
+pacman::p_load(pacman, dplyr, tidyr, lubridate, survival, survminer, ggthemes, ggplot2, directlabels, grid, gridExtra)
+
+df <- read.csv("/xxxx/longitudinal_non_AD_baseline_delete_second_or_later_AD_202410.csv")
+
+df$visit_date <- ymd(df$visit_date)
+df$MRI_date <- ymd(df$MRI_date)
+
+head(df)
+
+# Grouped based on baseline MRI scores + Calculated time difference from baseline (first MRI_date) to each follow-up visit (visit_date)
+df1 <- df %>% 
+  select(ID, Age, Sex, Education, Diag_mk, visit_date, visit_sequence, MRI_date, MRI_sequence, sigmoid_risk_score, linear_risk_score) %>% 
+  arrange(ID, visit_date) %>%  # sort by ID and visit_date
+  group_by(ID) %>%
+  mutate(baseline_risk_group = ifelse(visit_sequence == 1 & sigmoid_risk_score >= 0.38, "High Risk",
+                        ifelse(visit_sequence == 1 & sigmoid_risk_score < 0.38, "Low Risk", NA))) %>%
+  fill(baseline_risk_group, .direction = "downup") %>%
+  mutate(baseline_date = first(visit_date[visit_sequence == 1]),
+         baseline_dx = first(Diag_mk[visit_sequence ==1]),
+         baseline_linear_risk_score = first(linear_risk_score[visit_sequence ==1]),
+         baseline_age = first(Age[visit_sequence ==1]),
+         baseline_sex = first(Sex[visit_sequence ==1]),
+         baseline_edu = first(Education[visit_sequence ==1]),
+         time_months = interval(ymd(baseline_date), ymd(visit_date)) %/% months(1)) %>%
+  ungroup()
+
+head(df1)
+
+# Make sure there is only one record per ID
+# Select the last follow-up record for each ID as the observed endpoint for survival analysis
+data_unique <- df1 %>%
+  group_by(ID) %>%
+  filter(row_number() == n()) %>%
+  ungroup()
+
+summary(data_unique$time_months)
+
+# Construct the survivor object to make sure the event information is correct
+data_unique <- data_unique %>%
+  mutate(event = ifelse(Diag_mk == "AD", 1, 0))
+
+head(data_unique)
+
+write.csv(data_unique, "xxxxx/survival_or_cox_analysis_use_2025Nov.csv",row.names = F)
+
+# Create Surv object
+surv_obj <- Surv(data_unique$time_months, data_unique$event)
+
+# Fitting Kaplan-Meier survival curves
+fit <- survfit(surv_obj ~ baseline_risk_group, data = data_unique)
+
+# Create the ggsurvplot
+surv_plot <- ggsurvplot(fit, data = data_unique, 
+           break.time.by = 24,
+           fun = "pct",
+           linetype = "solid",
+           pval = T, 
+           pval.coord = c(-5,58),
+           pval.method = T,
+           pval.method.coord = c(-5,68),
+           conf.int = T,
+           surv.median.line = "h",
+           title = "Full Sample",
+           font.title = c(16, "bold"),
+           legend.title = "Risk Group",
+           legend.labs = c("High Risk", "Low Risk"),
+           font.legend = 12,
+           legend = c(0.1,0.2),
+           xlab = "Time (months)",
+           ylab = "Probability of Non-Conversion",
+           font.x = c(14, "bold"),
+           font.y = c(14, "bold"),
+           font.tickslab = 12,
+           risk.table = "nrisk_cumevents", 
+           fontsize = 4.5,
+           tables.col = "strata",
+           tables.legend = F,
+           risk.table.title = "Number at Risk (Cumulative Number of Events)",
+           ggtheme = theme_few() +
+             theme(plot.title = element_text(hjust = 0.5, margin = margin(b=10))),
+           tables.theme = theme_cleantable() +
+             theme(plot.title = element_text(hjust = 0, size = 14, face = "bold"),
+                   axis.text.y = element_text(size = 14)),
+           xlim = c(0, 168), 
+           ylim = c(0, 100),
+           palette = c("lightcoral", "darkturquoise"))
+
+# Compare the difference in survival curves between the two groups
+surv_diff <- survdiff(surv_obj ~ baseline_risk_group, data = data_unique)
+print(surv_diff)
+
+# Modify the chart component to hide the legend of the risk table
+surv_plot$table <- surv_plot$table + theme(legend.position = "none")
+
+# Combine charts and risk tables using grid.arrange()
+combined_plot <- grid.arrange(surv_plot$plot, surv_plot$table, heights = c(3, 1))
+
+ggsave("/xxxx/survival_plot.png", plot = combined_plot, dpi = 900, width = 7.5, height = 5, units = "in")
+
+# Fit Kaplan-Meier survival curves for NC, SCD, and MCI, respectively, and generate the graphs
+diagnosis_levels <- c("NC", "SCD", "MCI")
+plots_list_dx <- list()  # Initialize a list to store charts for each diagnosis state
+median_times_dx <- list() # Initialize a list to store the median survival time for each diagnosis state
+
+for (diag in diagnosis_levels) {
+   # Filter data based on current diagnosis status
+  subset_data <- subset(data_unique, baseline_dx == diag)
+  
+  # Create Surv object for filtered data
+  surv_obj_dx <- Surv(subset_data$time_months, subset_data$event)
+  
+  # Fit the survival curve
+  fit_dx <- survfit(surv_obj_dx ~ baseline_risk_group, data = subset_data)
+
+  # Get median survival time
+  median_time_dx <- quantile(fit_dx, probs = 0.5, conf.int = F)
+  median_times_dx[[diag]] <- median_time_dx
+
+  # create ggsurvplot
+  surv_plot_dx <- ggsurvplot(fit_dx, data = subset_data, 
+                             break.time.by = 24,
+                             fun = "pct",
+                             linetype = "solid",
+                             pval = TRUE, 
+                             pval.coord = c(-5,58),
+                             pval.method = TRUE,
+                             pval.method.coord = c(-5,68),
+                             conf.int = TRUE,
+                             surv.median.line = "h",
+                             title = paste("Baseline", diag, "Group"),
+                             font.title = c(16, "bold"),
+                             legend.title = "Risk Group",
+                             legend.labs = c("High Risk", "Low Risk"),
+                             font.legend = 12,
+                             legend = c(0.1,0.2),
+                             xlab = "Time (months)",
+                             ylab = "Probability of Non-Conversion",
+                             font.x = c(14, "bold"),
+                             font.y = c(14, "bold"),
+                             font.tickslab = 12,
+                             risk.table = "nrisk_cumevents", 
+                             fontsize = 4.5,
+                             tables.col = "strata",
+                             tables.legend = FALSE,
+                             risk.table.title = "Number at Risk (Cumulative Number of Events)",
+                             ggtheme = theme_few() +
+                               theme(plot.title = element_text(hjust = 0.5, margin = margin(b=10))),
+                             tables.theme = theme_cleantable() +
+                               theme(plot.title = element_text(hjust = 0, size = 14, face = "bold"),
+                                     axis.text.y = element_text(size = 14)),
+                             xlim = c(0, 168), 
+                             ylim = c(0, 100),
+                            palette = c("lightcoral", "darkturquoise"))
+
+  surv_plot_dx$table <- surv_plot_dx$table + theme(legend.position = "none")
+  
+  plots_list_dx[[diag]] <- surv_plot_dx
+}
+
+# Print median survival time for each diagnostic state
+print(paste("NC_high_risk:", median_times_dx$NC[1]))
+print(paste("NC_low_risk:", median_times_dx$NC[2]))
+print(paste("SCD_high_risk", median_times_dx$SCD[1]))
+print(paste("SCD_low_risk", median_times_dx$SCD[2]))
+print(paste("MCI_high_risk", median_times_dx$MCI[1]))
+print(paste("MCI_low_risk", median_times_dx$MCI[2]))
+
+# Add vertical lines and values for median survival time
+median_MCI_h <- median_times_dx$MCI[1]
+plots_list_dx$MCI$plot <- plots_list_dx$MCI$plot +
+  annotate("segment", 
+           x = median_MCI_h, 
+           xend = median_MCI_h, 
+           y = 0, 
+           yend = 50,
+           linetype = "dashed", 
+           color = "lightcoral") +
+  annotate("text", 
+           x = median_MCI_h + 2, 
+           y = 5, 
+           label = paste(median_MCI_h, "months"), 
+           color = "lightcoral", 
+           hjust = 0) 
+
+# Combine charts and risk tables using grid.arrange()
+# Modify the chart component to hide the legend of the risk table
+combined_plot_NC <- grid.arrange(plots_list_dx$NC$plot, plots_list_dx$NC$table, heights = c(3, 1))
+combined_plot_SCD <- grid.arrange(plots_list_dx$SCD$plot, plots_list_dx$SCD$table, heights = c(3, 1))
+
+combined_plot_MCI <- grid.arrange(plots_list_dx$MCI$plot, plots_list_dx$MCI$table, heights = c(3, 1))
+
+ggsave("xxxx/survival_plot_NC.png", plot = combined_plot_NC, dpi = 900, width = 7.5, height = 5, units = "in")
+ggsave("xxxx/survival_plot_SCD.png", plot = combined_plot_SCD, dpi = 900, width = 7.5, height = 5, units = "in")
+ggsave("xxxx/progression/survival_plot_MCI.png", plot = combined_plot_MCI, dpi = 900, width = 7.5, height = 5, units = "in")
+```
+
+## Cox analysis
+
+```{r}
+library(survival)
+library(survminer)
+library(coxphf)
+
+## 1. Load data -----------------------------------------
+dat <- read.csv("/Users/chenyanrong_1/Desktop/Desktop_Yanrong_Later/Project/AD/updated_diagnosis/202410_revisit_by_R/survival_or_cox_analysis_use_2025Nov.csv")
+
+dat$baseline_simplified_dx <- ifelse(dat$baseline_dx %in% c("NC", "SCD"), 
+                                      "NCorSCD", 
+                                      as.character(dat$baseline_dx))
+dat$baseline_simplified_dx <- factor(dat$baseline_simplified_dx, 
+                                      levels = c("NCorSCD", "MCI"))
+
+## 1b. Standardize risk score (z-score, based on full sample mean/SD) -----
+dat$baseline_linear_risk_score_z <- as.numeric(scale(dat$baseline_linear_risk_score))
+
+## 2. Full Sample Analysis -------------------------
+message("======== 1. Full Sample Analysis ========")
+# change the model IV list as you need (e.g., control for covariates or not)
+cox_all <- coxph(Surv(time = time_months, event = event) ~ baseline_linear_risk_score_z + baseline_age + baseline_sex + baseline_edu + strata(baseline_simplified_dx), data = dat)
+summary(cox_all)
+test_ph_all <- cox.zph(cox_all)
+print(test_ph_all)
+plot(test_ph_all)
+
+## 3. MCI Subgroup Analysis ----------------------
+message("======== 2. MCI Subgroup Analysis ========")
+# Subset MCI data
+dat_mci <- subset(dat, baseline_dx == "MCI") 
+# Check N and number of events in MCI group
+print(paste("MCI Total N:", nrow(dat_mci)))
+print(paste("MCI Events:", sum(dat_mci$event == 1)))
+# Fit Cox model for MCI
+cox_mci <- coxph(Surv(time = time_months, event = event) ~ baseline_linear_risk_score_z + baseline_age + baseline_sex + baseline_edu, data = dat_mci)
+summary(cox_mci)
+test_ph_mci <- cox.zph(cox_mci)
+print(test_ph_mci)
+plot(test_ph_mci)
+
+## 4. SCD Subgroup Analysis ----------------------
+message("======== 3. SCD Subgroup Analysis ========")
+# Subset SCD data
+dat_scd <- subset(dat, baseline_dx == "SCD")
+# Check N and number of events in SCD group
+print(paste("SCD Total N:", nrow(dat_scd)))
+print(paste("SCD Events:", sum(dat_scd$event == 1)))
+
+# Fit Cox model for SCD
+cox_scd <- coxph(Surv(time = time_months, event = event) ~ baseline_linear_risk_score_z, data = dat_scd)
+summary(cox_scd)
+test_ph_scd <- cox.zph(cox_scd)
+print(test_ph_scd)
+```
+
+# Lead time analysis
+
+## Sigmoid
+
+```{r}
+
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(ggthemes)
+library(scales)
+
+# read data
+df_ld <- read.csv("xxxx/lead_time_analysis.csv") %>% 
+  select(ID, visit_date, MRI_date, Diag_mk, sigmoid_risk_score, linear_risk_score)
+
+# Convert visit_date to date format
+df_ld$visit_date <- ymd(df_ld$visit_date)
+df_ld$MRI_date <- ymd(df_ld$MRI_date)
+
+# Get the visit_date for each ID at Diag_final == 'AD', named AD_diag_date
+df_ld <- df_ld %>%
+  group_by(ID) %>%
+  mutate(AD_diag_date = if_else(Diag_mk == "AD", visit_date, NA_Date_)) %>%
+  # Extract the first AD diagnosis date
+  mutate(AD_diag_date = min(AD_diag_date, na.rm = TRUE)) %>%
+  ungroup()
+
+# Calculate the difference between visit_date and AD_diag_date in years
+df_ld <- df_ld %>%
+  filter(!is.na(sigmoid_risk_score)) %>% 
+  mutate(year_diff = as.numeric(difftime(MRI_date, AD_diag_date, units = "days")) / 365.25) %>% 
+  mutate(year_diff_1 = as.numeric(difftime(visit_date, AD_diag_date, units = "days")) / 365.25) %>% 
+  filter(year_diff_1 < 0)
+
+# Add new column lead_year, add line breaks to year_diff
+df_ld <- df_ld %>%
+  mutate(lead_year = case_when(
+    year_diff >= -1 & year_diff <= 0 ~ "-1 to 0\nyear",
+    year_diff >= -2 & year_diff < -1 ~ "-2 to -1\nyear",
+    year_diff >= -3 & year_diff < -2 ~ "-3 to -2\nyears",
+    year_diff >= -4 & year_diff < -3 ~ "-4 to -3\nyears",
+    year_diff >= -5 & year_diff < -4 ~ "-5 to -4\nyears",
+    year_diff >= -6 & year_diff < -5 ~ "-6 to -5\nyears",
+    year_diff >= -7 & year_diff < -6 ~ "-7 to -6\nyears",
+    year_diff >= -8 & year_diff < -7 ~ "-8 to -7\nyears",
+    year_diff >= -9 & year_diff < -8 ~ "-9 to -8\nyears",
+    year_diff >= -10 & year_diff < -9 ~ "-10 to -9\nyears",
+    year_diff >= -11 & year_diff < -10 ~ "-11 to -10\nyears",
+    year_diff >= -12 & year_diff < -11 ~ "-12 to -11\nyears",
+    year_diff >= -13 & year_diff < -12 ~ "-13 to -12\nyears",
+    year_diff >= -14 & year_diff < -13 ~ "-14 to -13\nyears",
+    TRUE ~ NA_character_
+  ))
+
+summary(df_ld)
+head(df_ld)
+
+# Create an empty data frame containing all intervals
+all_lead_years <- data.frame(lead_year = factor(c(
+  "-14 to -13\nyears", "-13 to -12\nyears", "-12 to -11\nyears", 
+  "-11 to -10\nyears", "-10 to -9\nyears", "-9 to -8\nyears", 
+  "-8 to -7\nyears", "-7 to -6\nyears", "-6 to -5\nyears", 
+  "-5 to -4\nyears", "-4 to -3\nyears", "-3 to -2\nyears", 
+  "-2 to -1\nyear", "-1 to 0\nyear"
+), levels = c(
+  "-14 to -13\nyears", "-13 to -12\nyears", "-12 to -11\nyears", 
+  "-11 to -10\nyears", "-10 to -9\nyears", "-9 to -8\nyears", 
+  "-8 to -7\nyears", "-7 to -6\nyears", "-6 to -5\nyears", 
+  "-5 to -4\nyears", "-4 to -3\nyears", "-3 to -2\nyears", 
+  "-2 to -1\nyear", "-1 to 0\nyear"
+)))
+
+# Count the frequency of each lead_year
+df_lead_count <- df_ld %>%
+  count(lead_year)
+
+# Merge all intervals with existing data to ensure that all intervals are displayed
+df_lead_full <- full_join(all_lead_years, df_lead_count, by = "lead_year") %>%
+  replace_na(list(n = 0))  # Replace NA with 0
+
+# Set lead_year to factor again to make sure the factor order is correct
+df_lead_full$lead_year <- factor(df_lead_full$lead_year, levels = levels(all_lead_years$lead_year))
+
+# Draw a bar based on lead_year and mark the bar with n=xx, ignore the n=0 mark
+ggplot(df_lead_full, aes(x = lead_year, y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue3") +
+  geom_text(data = df_lead_full %>% filter(n > 0), 
+            aes(label = paste0("n=", n)), 
+            vjust = -0.5, size = 5, color = "steelblue3") +  # mark n=xx on bar, ignore n=0, font color steelblue
+  geom_vline(xintercept = c(9.5, 11.5, 12.5, 13.5), linetype = "dashed", color = "steelblue3", size = 0.5) + 
+  labs(#title = "Frequency of Years to First AD Diagnosis",
+       x = "Years to First AD Diagnosis",
+       y = "Frequency") +
+  scale_y_continuous(limits = c(0, 25)) + 
+  theme_few() +
+  theme(legend.position = "none",  
+        plot.title = element_text(size = 20, face = "bold", margin = margin(b = 5), hjust = 0.5),  
+        axis.text.x = element_text(size = 10.5), 
+        axis.text.y = element_text(size = 16), 
+        axis.title.x = element_text(size = 18, face = "bold", margin = margin(t = 5)),  
+        axis.title.y = element_text(size = 18, face = "bold", margin = margin(r = 5)), 
+        )  
+
+ggsave("xxxx/time_interval_2410.png", dpi = 900, width = 10, height = 5, units = "in")
+
+# Add new column lead_year_simple
+df_ld <- df_ld %>%
+  mutate(lead_year_simple = case_when(
+    year_diff >= -1 & year_diff <= 0 ~ "-1 to 0\nyear",
+    year_diff >= -2 & year_diff < -1 ~ "-2 to -1\nyear",
+    year_diff >= -3 & year_diff < -2 ~ "-3 to -2\nyears",
+    year_diff >= -5 & year_diff < -3 ~ "-5 to -3\nyears",
+    year_diff >= -14 & year_diff < -5 ~ "-14 to -5\nyears",
+    TRUE ~ NA_character_
+  ))
+
+# Create an empty data box containing all the simplified intervals, in order from early to late
+all_lead_years_simple <- data.frame(lead_year_simple = factor(c(
+  "-14 to -5\nyears", "-5 to -3\nyears", "-3 to -2\nyears", "-2 to -1\nyear", "-1 to 0\nyear"
+), levels = c(
+  "-14 to -5\nyears", "-5 to -3\nyears", "-3 to -2\nyears", "-2 to -1\nyear", "-1 to 0\nyear"
+)))
+
+# Count the frequency of each lead_year_simple
+df_lead_count_simple <- df_ld %>%
+  count(lead_year_simple)
+
+# Merge all intervals with existing data to ensure that all intervals are displayed
+df_lead_full_simple <- full_join(all_lead_years_simple, df_lead_count_simple, by = "lead_year_simple") %>%
+  replace_na(list(n = 0))  # Replace NA with 0
+
+# Ensure that the factors are in the right order
+df_lead_full_simple$lead_year_simple <- factor(df_lead_full_simple$lead_year_simple, 
+                                               levels = levels(all_lead_years_simple$lead_year_simple))
+
+
+# Draw a bar based on lead_year and mark the bar with n=xx, ignore the n=0 mark
+ggplot(df_lead_full_simple, aes(x = lead_year_simple, y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue3") +
+  geom_text(data = df_lead_full_simple %>% filter(n > 0), 
+            aes(label = paste0("n=", n)), 
+            vjust = -0.5, size = 5, color = "steelblue3") +  # Mark n=xx on bar, ignore n=0
+  labs(#title = "Frequency of Years to First AD Diagnosis",
+       x = "Years to First AD Diagnosis",
+       y = "Frequency") +
+  scale_y_continuous(limits = c(0, 25)) +  
+  theme_few() +
+  theme(legend.position = "none",  
+        plot.title = element_text(size = 20, face = "bold", margin = margin(b = 5), hjust = 0.5),  
+        axis.text.x = element_text(size = 10.5),  
+        axis.text.y = element_text(size = 16), 
+        axis.title.x = element_text(size = 18, face = "bold", margin = margin(t = 5)), 
+        axis.title.y = element_text(size = 18, face = "bold", margin = margin(r = 5)),  
+        )
+
+ggsave("xxxx/time_interval_2410_simple.png", dpi = 900, width = 8, height = 5, units = "in")
+
+# Calculate the proportion of each lead_year_simple group that satisfies n >= 0.38
+df_ld <- df_ld %>%
+  mutate(meets_threshold = ifelse(sigmoid_risk_score >= 0.38, 1, 0))  # Create boolean columns to mark cases where year_diff >= 0.38
+
+# Calculate the number and proportion of each lead_year_simple group that satisfy n >= 0.38
+proportion_df <- df_ld %>%
+  group_by(lead_year_simple) %>%
+  summarise(
+    n = sum(!is.na(meets_threshold)), # Calculate n in each group
+    proportion = round(mean(meets_threshold, na.rm = TRUE), 3) * 100
+  )
+
+# Ensure lead_year_simple is in the right order
+proportion_df$lead_year_simple <- factor(proportion_df$lead_year_simple, levels = c(
+  "-14 to -5\nyears", "-5 to -3\nyears", "-3 to -2\nyears", "-2 to -1\nyear", "-1 to 0\nyear"
+))
+
+# proportion_df
+print(proportion_df)
+
+# Use proportion_df to plot line graphs and label n and percentages
+ggplot(proportion_df, aes(x = lead_year_simple, y = proportion, group = 1)) +
+  geom_line(color = "steelblue3", size = 1) +  
+  geom_point(color = "steelblue3", size = 3) +  
+  geom_text(aes(label = paste0("n=", n)), vjust = 2, size = 5, color = "steelblue3") +  
+  geom_text(aes(label = paste0(proportion, "%")), vjust = -1, size = 6, color = "steelblue3") +
+  labs(#title = "Capture Rate at Different Times Before First AD Diagnosis",
+       x = "Years to First AD Diagnosis",
+       y = "Capture Rate (%)") +
+  scale_y_continuous(
+    limits = c(0, 105), 
+    breaks = c(0, 25, 50, 75, 100) 
+  ) +  
+  theme_few() +
+  theme(panel.grid.major.y = element_line(color = "gray90", size = 0.5)) + 
+  theme(plot.title = element_text(size = 18, face = "bold", hjust = 0.5), 
+        axis.text.x = element_text(size = 16), 
+        axis.text.y = element_text(size = 16),  
+        axis.title.x = element_text(size = 18, face = "bold", margin = margin(t = 5)),  
+        axis.title.y = element_text(size = 18, face = "bold", margin = margin(r = 5)))  
+
+ggsave("/xxxx/Capture_Rate.png", dpi = 900, width = 8, height = 5, units = "in")
+
+
+# Calculate the average of the sigmoid_risk_score in each lead_year_simple group
+sigmoid_risk_avg_df <- df_ld %>%
+  group_by(lead_year_simple) %>%
+  summarise(
+    n = sum(!is.na(sigmoid_risk_score)),
+    avg_sigmoid_risk_score = round(mean(sigmoid_risk_score, na.rm = TRUE),2))  # Calculate the average sigmoid_risk_score
+
+# Make sure lead_year_simple is in the right order
+sigmoid_risk_avg_df$lead_year_simple <- factor(sigmoid_risk_avg_df$lead_year_simple, levels = c(
+  "-14 to -5\nyears", "-5 to -3\nyears", "-3 to -2\nyears", "-2 to -1\nyear", "-1 to 0\nyear"
+))
+
+# check results
+print(sigmoid_risk_avg_df)
+
+# Use sigmoid_risk_avg_df to plot a line graph and display the sigmoid_risk_score for each individual from df_ld
+ggplot() +
+  geom_point(data = df_ld, aes(x = lead_year_simple, y = sigmoid_risk_score), color = "gray90", size = 2, alpha = 0.8) +  
+  geom_hline(yintercept = 0.38, linetype = "dashed", color = "gray90", size = 0.5) +
+  geom_line(data = sigmoid_risk_avg_df, aes(x = lead_year_simple, y = avg_sigmoid_risk_score, group = 1), color = "steelblue3", size = 1) + 
+  geom_point(data = sigmoid_risk_avg_df, aes(x = lead_year_simple, y = avg_sigmoid_risk_score), color = "steelblue3", size = 3) +  
+  geom_text(data = sigmoid_risk_avg_df, aes(x = lead_year_simple, y = avg_sigmoid_risk_score, label = paste0("n=", n)), vjust = 2, size = 5, color = "steelblue3") + 
+  geom_text(data = sigmoid_risk_avg_df, aes(x = lead_year_simple, y = avg_sigmoid_risk_score, label = paste0(avg_sigmoid_risk_score)), vjust = -1, size = 6, color = "steelblue3") + 
+  labs(#title = "Risk Score at Different Times Before First AD Diagnosis",
+       x = "Years to First AD Diagnosis",
+       y = "Risk Score") +
+  scale_y_continuous(
+    limits = c(0, 1.05), 
+    breaks = c(0, 0.25, 0.38, 0.5, 0.75, 1),
+  ) +  
+  theme_few() +
+  theme(panel.grid.major.y = element_line(color = "gray90", size = 0.5)) + 
+  theme(plot.title = element_text(size = 18, face = "bold", hjust = 0.5), 
+        axis.text.x = element_text(size = 16),  
+        axis.text.y = element_text(size = 16),  
+        axis.title.x = element_text(size = 18, face = "bold", margin = margin(t = 5)),  
+        axis.title.y = element_text(size = 18, face = "bold", margin = margin(r = 5))) 
+
+ggsave("/xxxx/Risk_Score.png", dpi = 900, width = 8, height = 5, units = "in")
+
+write.csv(df_ld, "xxxx/lead_time_analysis_use.csv", row.names = F)
+```
+
+## Linear
+
+```{r}
+library(dplyr)
+library(readr)
+library(lme4)
+library(lmerTest) 
+
+# 1. define file paths
+path_source <- "xxxx/lead_time_analysis.csv"
+path_use    <- "xxxx/lead_time_analysis_use.csv"
+
+# 2. read data
+df_source <- read_csv(path_source)
+df_use    <- read_csv(path_use)
+
+# 3. prepare data to merge
+demographics <- df_source %>%
+  select(ID, visit_date, Sex, Age, Education) %>%
+  # make sure duplicates are removed
+  distinct(ID, visit_date, .keep_all = TRUE) 
+
+# 4. Left Join
+df_merged <- df_use %>%
+  left_join(demographics, by = c("ID", "visit_date"))
+
+# 5. check
+print(head(df_merged))
+
+na_count <- sum(is.na(df_merged$Sex))
+if(na_count > 0) {
+  cat("Warning:", na_count, "rows failed to match demographic info, please check whether the date formats are consistent.\n")
+} else {
+  cat("Perfect! All rows successfully matched demographic info.\n")
+}
+
+#  6. save the merged file
+write_csv(df_merged, "xxxx/lead_time_analysis_use_with_demo.csv")
+
+
+df <- read.csv("/Users/chenyanrong_1/Desktop/Desktop_Yanrong_Later/Project/AD/updated_diagnosis/202410_revisit_by_R/lead_time_analysis/lead_time_analysis_use_with_demo.csv")
+
+
+df$ID <- as.factor(df$ID)
+
+df$Sex <- factor(df$Sex, 
+                 levels = c(1, 2), 
+                 labels = c("Male", "Female"))
+
+df$Education <- as.numeric(df$Education)
+
+model <- lmer(linear_risk_score ~ year_diff + Sex + Education + (1 | ID), 
+              data = df)
+
+# ==============================================================================
+# Results
+# ==============================================================================
+
+# 1. detailed results table
+cat("=== Model Summary ===\n")
+summary(model)
+# 2. get 95% confidence intervals
+cat("\n=== 95% Confidence Intervals ===\n")
+confint(model)
+# 3. Type III ANOVA table (overall significance)
+cat("\n=== Type III ANOVA Table ===\n")
+anova(model, type = 3, ddf = "Satterthwaite")
+```
+
+# Associations between risk scores & cognitive levels （GLOBAL)
+
+```{r}
+
+# load packages
+library(lme4)
+library(lmerTest)  
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(broom.mixed) 
+library(performance)
+library(ggthemes)    
+library(boot)         
+library(openxlsx)  
+
+# Set a random seed
+set.seed(215)
+
+# Read the data and do the necessary conversions
+df <- read.csv("xxx/cross_data.csv")%>% 
+  mutate(Sex = recode(Sex, `1` = "Male", `2` = "Female"),
+         Sex = factor(Sex, levels = c("Male", "Female")),
+         Diag_mk = factor(Diag_mk, levels = c("NC", "SCD", "MCI", "AD")),
+         visit_date = ymd(visit_date),
+         MRI_date = ymd(MRI_date),
+         plasma_date = ymd(plasma_date))
+
+# Define the variables to be fitted
+variables <- c("MMSE", "MES", "MOCA_B", "AVLT_L", "AVLT_R", "AFT", "BNT", "STT_A", "STT_B")
+
+
+# Initialize empty list to store model results
+results <- data.frame(
+  Variable = character(), 
+  n = numeric(), 
+  β = numeric(), 
+  β_raw = numeric(), 
+  f2 = numeric(), 
+  SE = numeric(), 
+  df = numeric(), 
+  t = numeric(), 
+  p = character(), 
+  CI.Lower = numeric(), 
+  CI.Upper = numeric(), 
+  `95% CI` = character()
+)
+
+# Iterate over the variables and compute the model
+for (var in variables) {
+  
+  # Filter the data to remove NA
+  df_new <- df %>% filter(!is.na(!!sym(var)))
+  
+  # Standardize explanatory variables and outcome
+  df_new[c("linear_risk_score", "Age", "Education")] <- 
+    scale(df_new[c("linear_risk_score", "Age", "Education")])
+  
+  # Sum coding for Sex
+  contrasts(df_new$Sex) <- contr.sum(2)
+  
+  df_new[[paste0(var, "_z")]] <- scale(df_new[[var]])
+  
+  # Construct the full model formula
+  formula_full <- as.formula(paste(paste0(var, "_z"), "~ linear_risk_score + Age + Sex + Education + (1|ID)"))
+  # Construct simplified model formula (remove linear_risk_score)
+  formula_reduced <- as.formula(paste(paste0(var, "_z"), "~ Age + Sex + Education + (1|ID)"))
+  
+  # Fit the model
+  model_full <- lmer(formula_full, data = df_new)
+  model_reduced <- lmer(formula_reduced, data = df_new)
+  
+  # Extract sample size
+  sample_size <- nobs(model_full)
+  
+  # Calculate the R^2 value
+  r2_full <- r2(model_full)$R2_marginal  # Marginal R^2
+  r2_reduced <- r2(model_reduced)$R2_marginal
+  
+  # Calculate the normalized effect size f^2
+  f2 <- (r2_full - r2_reduced) / (1 - r2_full)
+  
+  # Print the model summary to the console
+  print(paste("Model Summary for", var))
+  print(summary(model_full))
+  
+  # Extract fixed effect details
+  model_summary <- broom.mixed::tidy(model_full) %>% filter(term == "linear_risk_score")
+  
+  #Bootstrap to compute confidence intervals for fixed effects coefficients
+  bootstrap_result <- bootMer(
+    model_full, 
+    FUN = fixef, 
+    nsim = 5000, 
+    parallel = "multicore", 
+    use.u = FALSE, 
+    ncpus = 4
+  )
+  ci <- confint(bootstrap_result, level = 0.95, method = "boot")
+  
+  # Extract the statistics info
+  est_raw <- model_summary$estimate
+  est <- round(model_summary$estimate, 2)
+  std_err <- round(model_summary$std.error, 2)
+  t_val <- round(model_summary$statistic, 2)
+  df_val <- round(model_summary$df, 2)
+  
+  # Format the p value
+  p_val <- ifelse(model_summary$p.value < 0.001, 
+                  formatC(model_summary$p.value, format = "e", digits = 2), 
+                  format(round(model_summary$p.value, 3), nsmall = 3))
+  
+   # Generate 95% CI string
+  ci_str <- paste0("[", round(ci["linear_risk_score", 1], 2), ", ", round(ci["linear_risk_score", 2], 2), "]")
+  
+  # Save the results to the results table
+  results <- rbind(results, data.frame(
+    Variable = var,
+    n = sample_size,
+    β = est,
+    β_raw = est_raw,
+    f2 = round(f2, 2),
+    SE = std_err,
+    df = df_val,
+    t = t_val,
+    p = p_val,
+    CI.Lower = ci["linear_risk_score", 1],
+    CI.Upper = ci["linear_risk_score", 2],
+    `95% CI` = ci_str
+  ))
+}
+
+# Manually set the column names to make sure '95% CI' stays as is
+colnames(results) <- c("Variable", "n", "β", "β_raw", "f2", "SE", "df", "t", "p", "CI.Lower", "CI.Upper", "95% CI")
+
+# Rename the variable labels and set the display order
+results$Variable <- factor(recode(results$Variable,
+                                  "MOCA_B" = "MOCA-B",
+                                  "AVLT_L" = "AVLT-L",
+                                  "AVLT_R" = "AVLT-R",
+                                  "STT_A" = "STT-A",
+                                  "STT_B" = "STT-B"),
+                           levels = c("MMSE", "MES", "MOCA-B", "AVLT-L", "AVLT-R", "AFT", "BNT", "STT-A", "STT-B"))
+
+# Print the results table
+print(results)
+
+# Save the results dataframe as an Excel file using openxlsx
+write.xlsx(results, file = "xxx/cog_no_dx_results.xlsx")
+
+# Plotting with new tabs and displaying variables in reverse order
+ggplot(results, aes(x = Variable, y = β)) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.3, color = "royalblue3") +
+  geom_errorbar(aes(ymin = CI.Lower, ymax = CI.Upper), width = 0.2, color = "royalblue3") +
+  geom_point(color = "royalblue3") +
+  coord_flip() +
+  scale_x_discrete(limits = rev(c("MMSE", "MES", "MOCA-B", "AVLT-L", "AVLT-R", "AFT", "BNT", "STT-A", "STT-B"))) +
+  scale_y_continuous(limits = c(-0.35, 0.30), breaks = c(-0.30, -0.20, -0.10, 0, 0.10, 0.20, 0.30)) +
+  labs(#title = "Association Between Risk Scores and Cognitive Levels",
+       x = "",
+       y = "β Estimate (95% CI)") +
+  theme_few() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", margin = margin(b=5), hjust = 0.5),
+    axis.title.x = element_text(size = 20, face = "bold", margin = margin(t=5)),
+    axis.text.x = element_text(size = 18), 
+    axis.text.y = element_text(size = 18)) 
+
+ggsave("xxx/cog_global_forest_plot.png", dpi = 900, width = 8, height = 5, units = "in")
+```
+
+# Associations between risk scores & cognitive levels （by pre-AD diagnoses)
+
+```{r}
+
+library(lme4)
+library(lmerTest) 
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(broom.mixed) 
+library(ggthemes)  
+library(boot)        
+library(openxlsx)
+
+# set a random seed
+set.seed(215)
+
+# Read the data and do the necessary conversions
+
+df <- read.csv("xxx/cross_data.csv")%>% 
+  mutate(Sex = recode(Sex, `1` = "Male", `2` = "Female"),
+         Sex = factor(Sex, levels = c("Male", "Female")),
+         Diag_mk = factor(Diag_mk, levels = c("NC", "SCD", "MCI", "AD")),
+         visit_date = ymd(visit_date),
+         MRI_date = ymd(MRI_date),
+         plasma_date = ymd(plasma_date))
+
+# Define the normalized variables to be fitted
+variables <- c("MMSE", "MES", "MOCA_B", "AVLT_L", "AVLT_R", "AFT", "BNT", "STT_A", "STT_B")
+diagnoses <- c("NC", "SCD", "MCI")
+
+# Initialize empty list to store model results
+results <- data.frame(
+  Diagnosis = character(), 
+  Variable = character(), 
+  n = numeric(), 
+  β = numeric(), 
+  β_raw = numeric(), 
+  f2 = numeric(),
+  SE = numeric(), 
+  t = numeric(), 
+  p = character(), 
+  CI.Lower = numeric(), 
+  CI.Upper = numeric(), 
+  `95% CI` = character()
+)
+
+# Analyze each diagnostic group
+for (diag in diagnoses) {
+  df_diag <- df %>% filter(Diag_mk == diag)  # group data by diagnoses
+  
+  for (var in variables) {
+    df_diag_new <- df_diag %>% filter(!is.na(!!sym(var)))
+    
+     # Standardize explanatory variables and outcome
+    df_diag_new[c("linear_risk_score", "Age", "Education")] <-
+      scale(df_diag_new[c("linear_risk_score", "Age", "Education")])
+    
+    df_diag_new[[paste0(var, "_z")]] <- scale(df_diag_new[[var]])
+    
+    # Sum coding for Sex
+    contrasts(df_diag_new$Sex) <- contr.sum(2)
+  
+    # Construct the model formula
+    formula <- as.formula(paste(paste0(var, "_z"), "~ linear_risk_score + Age + Sex + Education"))
+    
+    if (diag == "AD") {
+      # Use a general linear model for AD
+      model <- lm(formula, data = df_diag_new)
+
+      # R^2 for full and simplified models
+      r2_full <- summary(model)$r.squared
+      r2_reduced <- summary(lm(update(formula, . ~ . - linear_risk_score), data = df_diag_new))$r.squared
+      
+      # Calculate the standardized effect size f^2
+      f2 <- (r2_full - r2_reduced) / (1 - r2_full)
+      
+
+      # Extract model statistics info
+      model_summary <- summary(model)$coefficients["linear_risk_score", ]
+      df_val <- df.residual(model)
+      p_val <- model_summary["Pr(>|t|)"]
+      
+      # Bootstrap CI
+      boot_fn <- function(data, indices) {
+        d <- data[indices, ]
+        model_boot <- lm(formula, data = d)
+        coef(model_boot)["linear_risk_score"]
+      }
+      bootstrap_result <- boot(data = df_diag_new, statistic = boot_fn, R = 5000)
+      ci <- boot.ci(bootstrap_result, type = "perc")
+      ci_lower <- ci$percent[4]
+      ci_upper <- ci$percent[5]
+    } else {
+      # Use mixed effects modeling for other cases
+      formula <- update(formula, . ~ . + (1|ID))
+      model <- lmer(formula, data = df_diag_new)
+      
+      # R^2 for full and simplified models
+      r2_full <- r2(model)$R2_marginal
+      r2_reduced <- r2(lmer(update(formula, . ~ . - linear_risk_score), data = df_diag_new))$R2_marginal
+      
+      # Calculate the normalized effect size f^2
+      f2 <- (r2_full - r2_reduced) / (1 - r2_full)
+      
+      # Extract model statistics
+      model_summary <- summary(model)$coefficients["linear_risk_score", ]
+      df_val <- model_summary["df"]
+      p_val <- model_summary["Pr(>|t|)"]
+      
+      # Bootstrap CI
+      bootstrap_result <- bootMer(model, FUN = fixef, nsim = 5000, parallel = "multicore", ncpus = 4)
+      ci <- confint(bootstrap_result, level = 0.95, method = "boot")
+      ci_lower <- ci["linear_risk_score", 1]
+      ci_upper <- ci["linear_risk_score", 2]
+    }
+
+    # Generate a confidence interval string
+    ci_str <- paste0("[", round(ci_lower, 2), ", ", round(ci_upper, 2), "]")
+    
+    # Format p-value
+    p_val_formatted <- ifelse(p_val < 0.001, 
+                              formatC(p_val, format = "e", digits = 2), 
+                              format(round(p_val, 3), nsmall = 3))
+    
+    # Save the results to a table
+    results <- rbind(results, data.frame(
+      Diagnosis = diag,
+      Variable = var,
+      n = nobs(model),
+      β = round(model_summary["Estimate"], 2),
+      β_raw = model_summary["Estimate"],
+      f2 = round(f2, 2),
+      SE = round(model_summary["Std. Error"], 2),
+      t = round(model_summary["t value"], 2),
+      p = p_val_formatted,
+      CI.Lower = ci_lower,
+      CI.Upper = ci_upper,
+      `95% CI` = ci_str
+    ))
+  }
+}
+
+# Set column names and rename variable labels
+colnames(results) <- c("Diagnosis", "Variable", "n", "β", "β_raw", "f2","SE", "t", "p", "CI.Lower", "CI.Upper", "95% CI")
+results$Variable <- factor(
+  recode(
+    results$Variable,
+    "MOCA_B" = "MOCA-B",
+    "AVLT_L" = "AVLT-L",
+    "AVLT_R" = "AVLT-R",
+    "STT_A" = "STT-A",
+    "STT_B" = "STT-B"
+  ), 
+  levels = c("MMSE", "MES", "MOCA-B", "AVLT-L", "AVLT-R", "AFT", "BNT", "STT-A", "STT-B")
+)
+
+print(results)
+
+write.xlsx(results, file = "xxx/cog_within_diag_results.xlsx")
+
+# Set the diagnosis factor level order
+results$Diagnosis <- factor(results$Diagnosis, levels = c("NC", "SCD", "MCI"))
+
+# Draw a forest plot and display it in diagnostic groups
+ggplot(results, aes(x = Variable, y = β_raw, color = Diagnosis, shape = Diagnosis)) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.3, color = "royalblue3") +
+  geom_errorbar(aes(ymin = CI.Lower, ymax = CI.Upper), width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(position = position_dodge(width = 0.5), size = 2) +
+  coord_flip() +
+  scale_x_discrete(limits = rev(c("MMSE", "MES", "MOCA-B", "AVLT-L", "AVLT-R", "AFT", "BNT", "STT-A", "STT-B"))) +
+  scale_y_continuous(limits = c(-0.6, 0.4), breaks = c(-0.8, -0.6, -0.4, -0.2, 0, 0.20, 0.4)) +
+  labs(#title = "Association Between Risk Scores and Cognitive Levels by Diagnosis",
+       x = "",
+       y = "β Estimate (95% CI)") +
+  theme_few() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", margin = margin(b=5), hjust = 0.5),
+    axis.title.x = element_text(size = 20, face = "bold", margin = margin(t=5)),
+    axis.text.x = element_text(size = 18),
+    axis.text.y = element_text(size = 18),
+    legend.title = element_text(size = 16, face = "bold"), 
+    legend.text = element_text(size = 16)
+  ) +
+  scale_color_manual(values = c("NC" = "green4", "SCD" = "dodgerblue3", "MCI" = "goldenrod2")) +  
+  scale_shape_manual(values = c("NC" = 16, "SCD" = 17, "MCI" = 18)) + 
+  guides(color = guide_legend(reverse = TRUE), shape = guide_legend(reverse = TRUE))
+
+
+ggsave("xxxx/cog_forest_plot_withindx.png", dpi = 900, width = 8, height = 5, units = "in")
+```
+
+# Associations between risk scores & plasma biomarkers （GLOBAL)
+
+```{r}
+
+library(lme4)
+library(lmerTest)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(broom.mixed)  
+library(ggthemes)
+library(boot)    
+library(openxlsx) 
+
+# set a random seed
+set.seed(215)
+
+# Read the data and perform the necessary conversions
+df <- read.csv("xxx/cross_data.csv") %>% 
+  mutate(Sex = recode(Sex, `1` = "Male", `2` = "Female"),
+         Sex = factor(Sex, levels = c("Male", "Female")),
+         Diag_mk = factor(Diag_mk, levels = c("NC", "SCD", "MCI", "AD")),
+         visit_date = ymd(visit_date),
+         MRI_date = ymd(MRI_date),
+         plasma_date = ymd(plasma_date))
+
+
+# Define the variables to be fitted
+variables <- c("Plasma_Aβ42_40_ratio","Plasma_p_tau181", "Plasma_p_tau217", "Plasma_NfL", "Plasma_GFAP")
+
+# Initialize empty list to store model results
+results <- data.frame(
+  Variable = character(), 
+  n = numeric(), 
+  β = numeric(), 
+  β_raw = numeric(), 
+  f2 = numeric(),
+  SE = numeric(), 
+  df = numeric(), 
+  t = numeric(), 
+  p = character(), 
+  CI.Lower = numeric(), 
+  CI.Upper = numeric(), 
+  `95% CI` = character()
+)
+
+# Iterate over the variables and compute the model
+for (var in variables) {
+  
+
+  # Filter data, remove NA
+  df_new <- df %>% filter(!is.na(!!sym(var)))
+  
+  # Standardize explanatory variables and outcome
+  df_new[c("linear_risk_score", "Age", "Education")] <- 
+    scale(df_new[c("linear_risk_score", "Age", "Education")])
+  
+  # Sum coding for Sex
+  contrasts(df_new$Sex) <- contr.sum(2)
+  
+  df_new[[paste0(var, "_z")]] <- scale(df_new[[var]])
+  
+  # Construct the full model formula
+  formula_full <- as.formula(paste(paste0(var, "_z"), "~ linear_risk_score + Age + Sex + Education + (1|ID)"))
+  # Construct simplified model formula (remove linear_risk_score)）
+  formula_reduced <- as.formula(paste(paste0(var, "_z"), "~ Age + Sex + Education + (1|ID)"))
+
+
+  # Fit the model
+  model_full <- lmer(formula_full, data = df_new)
+  model_reduced <- lmer(formula_reduced, data = df_new)
+  
+  # Extract sample size
+  sample_size <- nobs(model_full)
+  
+  # Calculate the R^2 value
+  r2_full <- r2(model_full)$R2_marginal  # Marginal R^2
+  r2_reduced <- r2(model_reduced)$R2_marginal
+  
+  # Calculate standardized effect size f^2
+  f2_beyond <- (r2_full - r2_reduced) / (1 - r2_full)
+  
+  # Print model summary to console
+  print(paste("Model Summary for", var))
+  print(summary(model_full))
+  
+# Extract fixed effects details
+  model_summary <- broom.mixed::tidy(model_full) %>% filter(term == "linear_risk_score")
+  
+  # Do a bootstrap to compute confidence intervals for fixed effects coefficients
+  bootstrap_result <- bootMer(
+    model_full, 
+    FUN = fixef, 
+    nsim = 5000, 
+    parallel = "multicore", 
+    use.u = FALSE, 
+    ncpus = 4
+  )
+  ci <- confint(bootstrap_result, level = 0.95, method = "boot")
+  
+  # Extract statistical information
+  est_raw <- model_summary$estimate
+  est <- round(model_summary$estimate, 2)
+  std_err <- round(model_summary$std.error, 2)
+  t_val <- round(model_summary$statistic, 2)
+  df_val <- round(model_summary$df, 2)
+  
+  # Format the p-values
+  p_val <- ifelse(model_summary$p.value < 0.001, 
+                  formatC(model_summary$p.value, format = "e", digits = 2), 
+                  format(round(model_summary$p.value, 3), nsmall = 3))
+  
+ # Generate 95% CI strings
+  ci_str <- paste0("[", round(ci["linear_risk_score", 1], 2), ", ", round(ci["linear_risk_score", 2], 2), "]")
+
+  # Save the results in the results table
+  results <- rbind(results, data.frame(
+    Variable = var,
+    n = sample_size,
+    β = est,
+    β_raw = est_raw,
+    f2 = round(f2, 2),
+    SE = std_err,
+    df = df_val,
+    t = t_val,
+    p = p_val,
+    CI.Lower = ci["linear_risk_score", 1],
+    CI.Upper = ci["linear_risk_score", 2],
+    `95% CI` = ci_str
+  ))
+}
+
+# Setting and sorting variable labels
+results$Variable <- factor(
+  recode(
+    results$Variable,
+    "Plasma_Aβ42_40_ratio" = "Plasma Aβ42/40 ratio",
+    "Plasma_p_tau181" = "Plasma p-tau181",
+    "Plasma_p_tau217" = "Plasma p-tau217",
+    "Plasma_NfL" = "Plasma NfL",
+    "Plasma_GFAP" = "Plasma GFAP"
+  ), 
+  levels = c("Plasma Aβ42/40 ratio", "Plasma p-tau181", "Plasma p-tau217", "Plasma NfL", "Plasma GFAP")
+)
+
+print(results)
+
+write.xlsx(results, file = "xxx/plasma_no_dx_results.xlsx")
+
+
+ggplot(results, aes(x = Variable, y = β_raw)) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.3, color = "royalblue3") +
+  geom_errorbar(aes(ymin = CI.Lower, ymax = CI.Upper), width = 0.2, color = "royalblue3") +
+  geom_point(color = "royalblue3") +
+  coord_flip() +
+  scale_x_discrete(limits = rev(c("Plasma Aβ42/40 ratio","Plasma p-tau181", "Plasma p-tau217", "Plasma NfL", "Plasma GFAP"))) +
+  scale_y_continuous(limits = c(-0.10, 0.30), breaks = c(-0.10, 0, 0.10, 0.20, 0.30)) +
+  labs(#title = "Association Between Risk Scores and Plasma Biomarker Levels",
+       x = "",
+       y = "β Estimate (95% CI)") +
+  theme_few() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", margin = margin(b=5), hjust = 0.5),
+    axis.title.x = element_text(size = 20, face = "bold", margin = margin(t=5)),  
+    axis.text.x = element_text(size = 18),  
+    axis.text.y = element_text(size = 18)) 
+
+ggsave("xxxx/global_plasma_forest_plot.png", dpi = 900, width = 9.2, height = 5, units = "in")
+```
+
+# Associations between risk scores & plasma biomarkers （by pre-AD diagnoses)
+
+```{r}
+
+library(lme4)
+library(lmerTest)  
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(broom.mixed)  
+library(performance)
+library(ggthemes)     
+library(boot)        
+library(openxlsx) 
+
+
+
+# set a random seed
+set.seed(215)
+
+# Read the data and do the necessary conversions
+df <- read.csv("/Users/chenyanrong_1/Desktop/Desktop_Yanrong_Later/Project/AD/updated_diagnosis/202410_revisit_by_R/cross-sectional/cross_data.csv")%>% 
+  mutate(Sex = recode(Sex, `1` = "Male", `2` = "Female"),
+         Sex = factor(Sex, levels = c("Male", "Female")),
+         Diag_mk = factor(Diag_mk, levels = c("NC", "SCD", "MCI", "AD")),
+         visit_date = ymd(visit_date),
+         MRI_date = ymd(MRI_date),
+         plasma_date = ymd(plasma_date))
+
+# Define the standardized variables to be fitted
+variables <- c("Plasma_Aβ42_40_ratio","Plasma_p_tau181", "Plasma_p_tau217", "Plasma_NfL","Plasma_GFAP")
+diagnoses <- c("NC", "SCD", "MCI")
+
+# Initialize empty list to store model results
+results <- data.frame(
+  Diagnosis = character(), 
+  Variable = character(), 
+  n = numeric(), 
+  β = numeric(), 
+  β_raw = numeric(), 
+  f2 = numeric(),
+  SE = numeric(), 
+  t = numeric(), 
+  p = character(), 
+  CI.Lower = numeric(), 
+  CI.Upper = numeric(), 
+  `95% CI` = character()
+)
+
+# Each diagnostic group analyzed
+for (diag in diagnoses) {
+  df_diag <- df %>% filter(Diag_mk == diag)  # Based on diagnostic subgroup data
+  
+  for (var in variables) {
+    df_diag_new <- df_diag %>% filter(!is.na(!!sym(var)))
+    
+    # Standardize explanatory variables and outcome
+    df_diag_new[c("linear_risk_score", "Age", "Education")] <-
+      scale(df_diag_new[c("linear_risk_score", "Age", "Education")])
+    
+    df_diag_new[[paste0(var, "_z")]] <- scale(df_diag_new[[var]])
+    
+    # Sum coding for Sex
+    contrasts(df_diag_new$Sex) <- contr.sum(2)
+   
+     # Build the model formula
+    formula <- as.formula(paste(paste0(var, "_z"), "~ linear_risk_score + Age + Sex + Education"))
+    
+    if (diag == "MCI") {
+      # Use a general linear model for MCI
+      model <- lm(formula, data = df_diag_new)
+      
+      # R^2 for full and simplified models
+      r2_full <- summary(model)$r.squared
+      r2_reduced <- summary(lm(update(formula, . ~ . - linear_risk_score), data = df_diag_new))$r.squared
+      
+      # Calculate standardized effect size f^2
+      f2 <- (r2_full - r2_reduced) / (1 - r2_full)
+      
+      # Extract model statistics
+      model_summary <- summary(model)$coefficients["linear_risk_score", ]
+      df_val <- df.residual(model)
+      p_val <- model_summary["Pr(>|t|)"]
+      
+      # Bootstrap CI
+      boot_fn <- function(data, indices) {
+        d <- data[indices, ]
+        model_boot <- lm(formula, data = d)
+        coef(model_boot)["linear_risk_score"]
+      }
+      bootstrap_result <- boot(data = df_diag_new, statistic = boot_fn, R = 5000)
+      ci <- boot.ci(bootstrap_result, type = "perc")
+      ci_lower <- ci$percent[4]
+      ci_upper <- ci$percent[5]
+    } else {
+
+      # Use mixed effects models for other cases
+      formula <- update(formula, . ~ . + (1|ID))
+      model <- lmer(formula, data = df_diag_new)
+      
+      # R^2 for full and simplified models
+      r2_full <- r2(model)$R2_marginal
+      r2_reduced <- r2(lmer(update(formula, . ~ . - linear_risk_score), data = df_diag_new))$R2_marginal
+      
+      # Calculate standardized effect size f^2
+      f2 <- (r2_full - r2_reduced) / (1 - r2_full)
+      
+      # Extract model statistics
+      model_summary <- summary(model)$coefficients["linear_risk_score", ]
+      df_val <- model_summary["df"]
+      p_val <- model_summary["Pr(>|t|)"]
+      
+      # Bootstrap CI
+      bootstrap_result <- bootMer(model, FUN = fixef, nsim = 5000, parallel = "multicore", ncpus = 4)
+      ci <- confint(bootstrap_result, level = 0.95, method = "boot")
+      ci_lower <- ci["linear_risk_score", 1]
+      ci_upper <- ci["linear_risk_score", 2]
+    }
+
+   # Generate confidence interval strings
+    ci_str <- paste0("[", round(ci_lower, 2), ", ", round(ci_upper, 2), "]")
+    
+
+    # Format p-values
+    p_val_formatted <- ifelse(p_val < 0.001, 
+                              formatC(p_val, format = "e", digits = 2), 
+                              format(round(p_val, 3), nsmall = 3))
+    
+    # Save the results to a table
+    results <- rbind(results, data.frame(
+      Diagnosis = diag,
+      Variable = var,
+      n = nobs(model),
+      β = round(model_summary["Estimate"], 2),
+      β_raw = model_summary["Estimate"],
+      f2 = round(f2, 2),
+      SE = round(model_summary["Std. Error"], 2),
+      df = df_val,
+      t = round(model_summary["t value"], 2),
+      p = p_val_formatted,
+      CI.Lower = ci_lower,
+      CI.Upper = ci_upper,
+      `95% CI` = ci_str
+    ))
+  }
+}
+
+# Set column names and rename variable labels
+colnames(results) <- c("Diagnosis", "Variable", "n", "β", "β_raw", "f2", "SE", "df", "t", "p", "CI.Lower", "CI.Upper", "95% CI")
+results$Variable <- factor(
+  recode(
+    results$Variable,
+    Plasma_Aβ42_40_ratio = "Plasma Aβ42/40 ratio",
+    Plasma_p_tau181 = "Plasma p-tau181",
+    Plasma_p_tau217 = "Plasma p-tau217",
+    Plasma_NfL = "Plasma NfL",
+    Plasma_GFAP = "Plasma GFAP"), 
+  levels = c("Plasma Aβ42/40 ratio", "Plasma p-tau181", "Plasma p-tau217", "Plasma NfL", "Plasma GFAP")
+)
+
+print(results)
+
+write.xlsx(results, file = "xxxxx/plasma_within_diag_results_dx.xlsx")
+
+# Set the diagnosis factor level order
+results$Diagnosis <- factor(results$Diagnosis, levels = c("NC", "SCD", "MCI"))
+
+# Draw a forest plot and display it in diagnostic groups
+ggplot(results, aes(x = Variable, y = β, color = Diagnosis, shape = Diagnosis)) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.3, color = "royalblue3") +
+  geom_errorbar(aes(ymin = CI.Lower, ymax = CI.Upper), width = 0.2, position = position_dodge(width = 0.5)) +
+  geom_point(position = position_dodge(width = 0.5), size = 2) +
+  coord_flip() +
+  scale_x_discrete(limits = rev(c("Plasma Aβ42/40 ratio","Plasma p-tau181", "Plasma p-tau217", "Plasma NfL", "Plasma GFAP"))) +
+  scale_y_continuous(limits = c(-0.8, 0.8), breaks = c(-0.8, -0.6, -0.4, -0.2, 0, 0.20, 0.40, 0.60, 0.8)) +
+  labs(#title = "Association Between Risk Scores and Plasma Biomarker Levels by Diagnosis",
+       x = "",
+       y = "β Estimate (95% CI)") +
+  theme_few() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", margin = margin(b=5), hjust = 0.5),
+    axis.title.x = element_text(size = 20, face = "bold", margin = margin(t=5)),
+    axis.text.x = element_text(size = 18),
+    axis.text.y = element_text(size = 18),
+    legend.title = element_text(size = 16, face = "bold"), 
+    legend.text = element_text(size = 16)
+  ) +
+  scale_color_manual(values = c("NC" = "green4", "SCD" = "dodgerblue3", "MCI" = "goldenrod2")) +  
+  scale_shape_manual(values = c("NC" = 16, "SCD" = 17, "MCI" = 18)) + 
+  guides(color = guide_legend(reverse = TRUE), shape = guide_legend(reverse = TRUE))
+  
+ggsave("xxxxx/plasma_forest_plot_withindx.png", dpi = 900, width = 9.2, height = 5, units = "in")
+```
+
+# Moderation models
+
+```{r}
+
+# ============================================================
+# Interaction analyses: Risk × Diagnosis, Sex, Age, Education
+# ============================================================
+
+library(lme4)
+library(lmerTest)
+library(dplyr)
+library(broom.mixed)
+
+# Read and prepare data
+df <- read.csv(
+  "xxxx/cross_data.csv"
+) %>%
+  mutate(
+    Sex = recode(Sex, `1` = "Male", `2` = "Female"),
+    Sex = factor(Sex, levels = c("Male", "Female")),
+    Diag_mk = factor(Diag_mk, levels = c("NC", "SCD", "MCI", "AD"))
+  )
+
+# Cognitive outcomes
+variables <- c(
+  "MMSE", "MES", "MOCA_B", "AVLT_L", "AVLT_R",
+  "AFT", "BNT", "STT_A", "STT_B"
+)
+
+# Function to run interaction model
+run_interaction <- function(data, outcome, moderator) {
+  
+  # Remove missing values
+  df_new <- data %>%
+    filter(
+      !is.na(.data[[outcome]]),
+      !is.na(linear_risk_score),
+      !is.na(Age),
+      !is.na(Sex),
+      !is.na(Education),
+      !is.na(Diag_mk)
+    )
+  
+  # Standardize continuous variables and binary Sex
+  df_new <- df_new %>%
+    mutate(
+      linear_risk_score = as.numeric(scale(linear_risk_score)),
+      Age = as.numeric(scale(Age)),
+      Education = as.numeric(scale(Education)),
+      outcome_z = as.numeric(scale(.data[[outcome]]))
+    )
+  
+  # Sum coding
+  contrasts(df_new$Sex) <- contr.sum(2)
+  contrasts(df_new$Diag_mk) <- contr.sum(4)
+  
+  # Construct model
+  formula <- switch(
+    moderator,
+    
+    "Diagnosis" =
+      outcome_z ~ linear_risk_score * Diag_mk +
+      Age + Sex + Education + (1 | ID),
+    
+    "Sex" =
+      outcome_z ~ linear_risk_score * Sex +
+      Age + Education + (1 | ID),
+    
+    "Age" =
+      outcome_z ~ linear_risk_score * Age +
+      Sex + Education + (1 | ID),
+    
+    "Education" =
+      outcome_z ~ linear_risk_score * Education +
+      Age + Sex + (1 | ID)
+  )
+  
+  model <- lmer(formula, data = df_new)
+  
+  # Extract interaction terms
+  interaction_terms <- broom.mixed::tidy(
+    model,
+    effects = "fixed",
+    conf.int = TRUE,
+    conf.level = 0.95
+  ) %>%
+    filter(grepl("linear_risk_score:", term) |
+             grepl(":linear_risk_score", term)) %>%
+    mutate(
+      Outcome = outcome,
+      Moderator = moderator,
+      n = nobs(model)
+    ) %>%
+    select(
+      Outcome, Moderator, term, n,
+      estimate, std.error, df, statistic, p.value,
+      conf.low, conf.high
+    )
+  
+  return(interaction_terms)
+}
+
+# Run all interaction analyses
+interaction_results <- bind_rows(
+  lapply(variables, function(x) {
+    bind_rows(
+      run_interaction(df, x, "Diagnosis"),
+      run_interaction(df, x, "Sex"),
+      run_interaction(df, x, "Age"),
+      run_interaction(df, x, "Education")
+    )
+  })
+)
+
+# Round results
+interaction_results <- interaction_results %>%
+  mutate(
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    df = round(df, 2),
+    statistic = round(statistic, 3),
+    p.value = ifelse(
+      p.value < 0.001,
+      formatC(p.value, format = "e", digits = 2),
+      sprintf("%.3f", p.value)
+    ),
+    conf.low = round(conf.low, 3),
+    conf.high = round(conf.high, 3),
+    `95% CI` = paste0(
+      "[", round(conf.low, 3), ", ",
+      round(conf.high, 3), "]"
+    )
+  )
+
+# Rename outcomes
+interaction_results$Outcome <- recode(
+  interaction_results$Outcome,
+  "MOCA_B" = "MOCA-B",
+  "AVLT_L" = "AVLT-L",
+  "AVLT_R" = "AVLT-R",
+  "STT_A" = "STT-A",
+  "STT_B" = "STT-B"
+)
+
+# Rename columns for readability
+interaction_results <- interaction_results %>%
+  rename(
+    Beta = estimate,
+    SE = std.error,
+    t = statistic,
+    p = p.value,
+    CI.Lower = conf.low,
+    CI.Upper = conf.high
+  )
+
+# Print results
+print(interaction_results, row.names = FALSE)
+```
+
+# in one model
+
+```{r}
+library(lme4)
+library(lmerTest)
+library(dplyr)
+library(car)
+library(emmeans)
+library(openxlsx)
+library(tibble)
+
+set.seed(215)
+
+df <- read.csv("xxxx/cross_data.csv") %>%
+  mutate(
+    Sex = dplyr::recode(as.character(Sex), `1` = "Male", `2` = "Female"),
+    Sex = factor(Sex, levels = c("Male", "Female")),
+    Diag_mk = factor(Diag_mk, levels = c("NC", "SCD", "MCI", "AD"))
+  )
+
+cognitive_variables <- c("MMSE", "MES", "MOCA_B", "AVLT_L", "AVLT_R", "AFT", "BNT", "STT_A", "STT_B")
+plasma_variables <- c("Plasma_Aβ42_40_ratio", "Plasma_p_tau181", "Plasma_p_tau217", "Plasma_NfL", "Plasma_GFAP")
+variables <- c(cognitive_variables, plasma_variables)
+
+rename_outcome <- function(x) {
+  dplyr::recode(x,
+    "MOCA_B" = "MOCA-B", "AVLT_L" = "AVLT-L", "AVLT_R" = "AVLT-R",
+    "STT_A" = "STT-A", "STT_B" = "STT-B",
+    "Plasma_Aβ42_40_ratio" = "Plasma Aβ42/40 ratio",
+    "Plasma_p_tau181" = "Plasma p-tau181",
+    "Plasma_p_tau217" = "Plasma p-tau217",
+    "Plasma_NfL" = "Plasma NfL",
+    "Plasma_GFAP" = "Plasma GFAP"
+  )
+}
+
+table_S2 <- data.frame()
+table_S3 <- data.frame()
+
+for (var in variables) {
+  cat("\n====================================\nOutcome:", var, "\n====================================\n")
+  
+  df_new <- df %>%
+    filter(!is.na(.data[[var]]), !is.na(linear_risk_score), !is.na(Age), !is.na(Sex), !is.na(Education), !is.na(Diag_mk)) %>%
+    mutate(
+      linear_risk_score = as.numeric(scale(linear_risk_score)),
+      Age = as.numeric(scale(Age)),
+      Education = as.numeric(scale(Education)),
+      outcome_z = as.numeric(scale(.data[[var]]))
+    )
+  
+  contrasts(df_new$Sex) <- contr.sum(2)
+  contrasts(df_new$Diag_mk) <- contr.sum(4)
+  
+  model <- lmer(outcome_z ~ linear_risk_score * Sex + linear_risk_score * Age + linear_risk_score * Education + linear_risk_score * Diag_mk + (1 | ID), data = df_new)
+  
+  # ============================================================
+  # Table S2: Type III interaction tests
+  # ============================================================
+  
+  anova_table <- car::Anova(model, type = 3)
+  
+  interaction_terms <- c("linear_risk_score:Sex", "linear_risk_score:Age", "linear_risk_score:Education", "linear_risk_score:Diag_mk")
+  
+  interaction_df <- as.data.frame(anova_table) %>%
+    rownames_to_column("Effect") %>%
+    filter(Effect %in% interaction_terms) %>%
+    mutate(
+      Outcome = rename_outcome(var),
+      n = nobs(model),
+      Moderator = case_when(
+        Effect == "linear_risk_score:Sex" ~ "Risk × Sex",
+        Effect == "linear_risk_score:Age" ~ "Risk × Age",
+        Effect == "linear_risk_score:Education" ~ "Risk × Education",
+        Effect == "linear_risk_score:Diag_mk" ~ "Risk × Diagnosis"
+      ),
+      Chisq = Chisq,
+      df = Df,
+      p = `Pr(>Chisq)`
+    ) %>%
+    select(Outcome, n, Moderator, Chisq, df, p)
+  
+  table_S2 <- bind_rows(table_S2, interaction_df)
+  
+  print(interaction_df)
+  
+  # ============================================================
+  # Table S3: Follow-up analyses for significant interactions
+  # ============================================================
+  
+  # ---------------- Risk × Sex ----------------
+  sex_p <- anova_table["linear_risk_score:Sex", "Pr(>Chisq)"]
+  
+  if (!is.na(sex_p) && sex_p < 0.05) {
+    sex_slopes <- emtrends(model, ~ Sex, var = "linear_risk_score")
+    sex_pairs <- pairs(sex_slopes, adjust = "tukey")
+    sex_slope_df <- as.data.frame(sex_slopes)
+    
+    male_slope <- sex_slope_df$linear_risk_score.trend[sex_slope_df$Sex == "Male"]
+    female_slope <- sex_slope_df$linear_risk_score.trend[sex_slope_df$Sex == "Female"]
+    
+    direction <- case_when(
+      female_slope > male_slope ~ "Stronger in Female",
+      female_slope < male_slope ~ "Stronger in Male",
+      TRUE ~ "No difference"
+    )
+    
+    table_S3 <- bind_rows(table_S3,
+      sex_slope_df %>%
+        mutate(
+          Outcome = rename_outcome(var),
+          Moderator = "Risk × Sex",
+          Comparison = Sex,
+          Estimate = linear_risk_score.trend,
+          CI = paste0("[", round(lower.CL, 3), ", ", round(upper.CL, 3), "]"),
+          Adjusted_p = NA,
+          Direction = direction
+        ) %>%
+        select(Outcome, Moderator, Comparison, Estimate, SE, df, CI, Adjusted_p, Direction)
+    )
+    
+    table_S3 <- bind_rows(table_S3,
+      as.data.frame(sex_pairs) %>%
+        mutate(
+          Outcome = rename_outcome(var),
+          Moderator = "Risk × Sex",
+          Comparison = contrast,
+          Estimate = estimate,
+          CI = NA,
+          Adjusted_p = p.value,
+          Direction = direction
+        ) %>%
+        select(Outcome, Moderator, Comparison, Estimate, SE, df, CI, Adjusted_p, Direction)
+    )
+  }
+  
+  # ---------------- Risk × Diagnosis ----------------
+  diag_p <- anova_table["linear_risk_score:Diag_mk", "Pr(>Chisq)"]
+  
+  if (!is.na(diag_p) && diag_p < 0.05) {
+    diag_slopes <- emtrends(model, ~ Diag_mk, var = "linear_risk_score")
+    diag_pairs <- pairs(diag_slopes, adjust = "tukey")
+    diag_slope_df <- as.data.frame(diag_slopes)
+    
+    table_S3 <- bind_rows(table_S3,
+      diag_slope_df %>%
+        mutate(
+          Outcome = rename_outcome(var),
+          Moderator = "Risk × Diagnosis",
+          Comparison = Diag_mk,
+          Estimate = linear_risk_score.trend,
+          CI = paste0("[", round(lower.CL, 3), ", ", round(upper.CL, 3), "]"),
+          Adjusted_p = NA,
+          Direction = NA
+        ) %>%
+        select(Outcome, Moderator, Comparison, Estimate, SE, df, CI, Adjusted_p, Direction)
+    )
+    
+    table_S3 <- bind_rows(table_S3,
+      as.data.frame(diag_pairs) %>%
+        mutate(
+          Outcome = rename_outcome(var),
+          Moderator = "Risk × Diagnosis",
+          Comparison = contrast,
+          Estimate = estimate,
+          CI = NA,
+          Adjusted_p = p.value,
+          Direction = case_when(
+            estimate > 0 ~ "Stronger in first-listed group",
+            estimate < 0 ~ "Stronger in second-listed group",
+            TRUE ~ "No difference"
+          )
+        ) %>%
+        select(Outcome, Moderator, Comparison, Estimate, SE, df, CI, Adjusted_p, Direction)
+    )
+  }
+  
+  # ---------------- Risk × Age ----------------
+  age_p <- anova_table["linear_risk_score:Age", "Pr(>Chisq)"]
+  
+  if (!is.na(age_p) && age_p < 0.05) {
+    age_slopes <- emtrends(model, ~ Age, var = "linear_risk_score", at = list(Age = c(-1, 0, 1)))
+    age_df <- as.data.frame(age_slopes)
+    
+    slope_low <- age_df$linear_risk_score.trend[age_df$Age == -1]
+    slope_high <- age_df$linear_risk_score.trend[age_df$Age == 1]
+    
+    direction <- case_when(
+      slope_high > slope_low ~ "Association strengthened with age",
+      slope_high < slope_low ~ "Association weakened with age",
+      TRUE ~ "No change"
+    )
+    
+    table_S3 <- bind_rows(table_S3,
+      age_df %>%
+        mutate(
+          Outcome = rename_outcome(var),
+          Moderator = "Risk × Age",
+          Comparison = case_when(Age == -1 ~ "−1 SD", Age == 0 ~ "Mean", Age == 1 ~ "+1 SD"),
+          Estimate = linear_risk_score.trend,
+          CI = paste0("[", round(lower.CL, 3), ", ", round(upper.CL, 3), "]"),
+          Adjusted_p = NA,
+          Direction = direction
+        ) %>%
+        select(Outcome, Moderator, Comparison, Estimate, SE, df, CI, Adjusted_p, Direction)
+    )
+  }
+  
+  # ---------------- Risk × Education ----------------
+  education_p <- anova_table["linear_risk_score:Education", "Pr(>Chisq)"]
+  
+  if (!is.na(education_p) && education_p < 0.05) {
+    education_slopes <- emtrends(model, ~ Education, var = "linear_risk_score", at = list(Education = c(-1, 0, 1)))
+    education_df <- as.data.frame(education_slopes)
+    
+    slope_low <- education_df$linear_risk_score.trend[education_df$Education == -1]
+    slope_high <- education_df$linear_risk_score.trend[education_df$Education == 1]
+    
+    direction <- case_when(
+      slope_high > slope_low ~ "Association strengthened with education",
+      slope_high < slope_low ~ "Association weakened with education",
+      TRUE ~ "No change"
+    )
+    
+    table_S3 <- bind_rows(table_S3,
+      education_df %>%
+        mutate(
+          Outcome = rename_outcome(var),
+          Moderator = "Risk × Education",
+          Comparison = case_when(Education == -1 ~ "−1 SD", Education == 0 ~ "Mean", Education == 1 ~ "+1 SD"),
+          Estimate = linear_risk_score.trend,
+          CI = paste0("[", round(lower.CL, 3), ", ", round(upper.CL, 3), "]"),
+          Adjusted_p = NA,
+          Direction = direction
+        ) %>%
+        select(Outcome, Moderator, Comparison, Estimate, SE, df, CI, Adjusted_p, Direction)
+    )
+  }
+}
+
+# ============================================================
+# Format tables
+# ============================================================
+
+table_S2 <- table_S2 %>%
+  mutate(
+    Chisq = round(Chisq, 2),
+    df = round(df, 0),
+    p = ifelse(p < 0.001, "<.001", sprintf("%.3f", p))
+  )
+
+table_S3 <- table_S3 %>%
+  mutate(
+    Estimate = round(Estimate, 3),
+    SE = round(SE, 3),
+    df = round(df, 2),
+    Adjusted_p = ifelse(is.na(Adjusted_p), NA, ifelse(Adjusted_p < 0.001, "<.001", sprintf("%.3f", Adjusted_p)))
+  )
+
+# ============================================================
+# Print
+# ============================================================
+
+cat("\n\n====================================\nTABLE S2: FORMAL INTERACTION TESTS\n====================================\n")
+print(table_S2, row.names = FALSE)
+
+cat("\n\n====================================\nTABLE S3: FOLLOW-UP ANALYSES\n====================================\n")
+print(table_S3, row.names = FALSE)
+
+# ============================================================
+# Export
+# ============================================================
+
+output_file <- "xxxx/interaction_results_tables.xlsx"
+
+wb <- createWorkbook()
+addWorksheet(wb, "Table S2")
+addWorksheet(wb, "Table S3")
+writeData(wb, "Table S2", table_S2)
+writeData(wb, "Table S3", table_S3)
+setColWidths(wb, "Table S2", cols = 1:ncol(table_S2), widths = "auto")
+setColWidths(wb, "Table S3", cols = 1:ncol(table_S3), widths = "auto")
+saveWorkbook(wb, output_file, overwrite = TRUE)
+
+cat("\nResults saved to:\n", output_file, "\n")
+```
+
+# Brain_subtypes
+
+## MMSE decline
+
+```{r}
+
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(ggforce)
+library(ggthemes)
+library(emmeans)
+
+# read data
+data <- read.csv("xxxx/longitudinal_All_baseline_add_SubtypeInd_FlagValie.csv")
+
+# Convert visit_date to date format
+data <- data %>%
+  mutate(visit_date = as.Date(visit_date, format = "%Y/%m/%d")) %>% 
+  mutate(Sex = ifelse(Sex == 2, 1, 0))# Convert Sex to a binary variable with Female as 1 and Male as 0
+
+# Find the score, date and Brain_subtype for each ID at visit_sequence=1
+baseline <- data %>%
+  filter(visit_sequence == 1) %>%
+  select(ID, Diag_mk, visit_date, Sex, Age, Education, MMSE, Brain_subtype, linear_risk_score) %>%
+  rename(baseline_dx = Diag_mk, baseline_date = visit_date, baseline_MMSE = MMSE)
+
+# Find the last visit_sequence > 1 for each ID with non-NA cognitive scores and calculate the last_date for each score separately
+last_visit <- data %>%
+  filter(visit_sequence > 1) %>%
+  group_by(ID) %>%
+  summarise(
+    last_date_MMSE = last(visit_date[!is.na(MMSE)]),
+    last_MMSE = last(MMSE[!is.na(MMSE)]),
+  )
+
+# Merge baseline and last_visit data
+merged_data <- baseline %>%
+  left_join(last_visit, by = "ID") %>% 
+  filter(!is.na(Brain_subtype))
+
+# Calculate score difference and time difference (based on last date of variable)
+merged_data <- merged_data %>%
+  mutate(
+    MMSE_change = last_MMSE - baseline_MMSE,
+    time_diff_years_MMSE = as.numeric(difftime(last_date_MMSE, baseline_date, units = "days")) / 365.25
+  )
+
+# Calculate the rate of change
+merged_data <- merged_data %>%
+  mutate(
+    MMSE_rate = MMSE_change / time_diff_years_MMSE
+  )
+
+head(merged_data)
+
+write.csv(merged_data, "xxxx/MMSE_score_change_rate.csv", row.names = FALSE)
+
+### Differences in cognitive scores across groups ######
+merged_data <- merged_data %>% 
+  filter(baseline_dx == "MCI") ##### change the dx group as need
+
+# Clean up data to ensure that there are no missing values
+data_mmse <- merged_data[complete.cases(merged_data$MMSE_rate, 
+                                        merged_data$Brain_subtype, 
+                                        merged_data$Sex, 
+                                        merged_data$Age, 
+                                        merged_data$Education),]
+
+# Check sample size for Brain_subtype grouping
+table(data_mmse$Brain_subtype)
+
+# Ensure that Brain_subtype is the factor type
+data_mmse$Brain_subtype <- as.factor(data_mmse$Brain_subtype)
+
+# ANOVA
+anova_mmse <- aov(MMSE_rate ~ Brain_subtype + Sex + Age + Education, data = data_mmse)
+
+summary(anova_mmse)
+
+# post-hoc comparison
+emmeans_mmse <- emmeans(anova_mmse, pairwise ~ Brain_subtype, adjust = "none")
+cat("MMSE_rate post-hoc comparison:\n")
+print(emmeans_mmse)
+
+############################ Visualization ###############################
+# define color
+custom_colors <- c("#FFCC00", "#FF6600", "#FF0000")
+
+# define plot function
+custom_sina_plot <- function(data, x_var, y_var, x_label, y_label, title, custom_colors) {
+  ggplot(data, aes_string(x = x_var, y = y_var)) +
+    geom_sina(aes_string(color = x_var), size = 2, alpha = 0.7) +
+    geom_boxplot(aes_string(fill = x_var), width = 0.3, alpha = 0.2, outlier.shape = NA, color = "black") +
+    scale_color_manual(values = custom_colors) +
+    scale_fill_manual(values = custom_colors) +
+    labs(title = title,
+         y = y_label) +  
+    scale_x_discrete(labels = c("1" = "Subtype 1", "2" = "Subtype 2", "3" = "Subtype 3")) +  
+    scale_y_continuous(limits = c(-10, 10)) +  
+    theme_few() +
+    theme(legend.position = "none",
+          plot.title = element_text(size = 18, face = "bold", margin = margin(b=5), hjust = 0.5),
+          axis.text.x = element_text(size = 18, color = "black", face = "bold"),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_blank(),  
+          axis.title.y = element_text(size = 18, face = "bold", margin = margin(r=5)))
+}
+ 
+# Sina Plot
+p_mmse <- custom_sina_plot(data_mmse, "Brain_subtype", "MMSE_rate", 
+                           x_label = NULL,  
+                           y_label = "MMSE Change Rate", 
+                           title = "Baseline MCI Group", 
+                           custom_colors = custom_colors)
+
+p_mmse
+
+ggsave("xxxxx/MMSE_change_rate_MCI.png", dpi = 900, width = 8, height = 5, units = "in")
+```
+
+## MMSE baseline
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+library(multcompView)
+library(ggforce)  
+library(ggthemes)  
+library(patchwork)
+library(emmeans)
+
+# read data
+data <- read.csv("xxxx/cognitive_score_change_rate.csv") 
+
+# keep lines where MMSE_rate is not NA to keep sample size consistent
+data <- data[!is.na(data$MMSE_rate), ]
+
+data <- data %>% 
+  filter(baseline_dx == "NC") # switch dignosis as needed
+
+# Ensure Brain_subtype is converted to factor type
+data$Brain_subtype <- as.factor(data$Brain_subtype)
+
+# anova
+anova_baseline_MMSE = aov(baseline_MMSE ~ Brain_subtype + Sex + Age + Education, data = data)
+
+summary(anova_baseline_MMSE)
+
+# emmeans post-hoc comparison
+emmeans_mmse <- emmeans(anova_baseline_MMSE,pairwise ~ Brain_subtype, adjust = "none")
+
+cat("baseline_MMSE post-hoc comparision :\n")
+print(emmeans_mmse)
+
+# define color
+custom_colors <- c("#FFCC00", "#FF6600", "#FF0000")
+
+# define plot style
+plot_sina <- function(var_name, y_limits = NULL) {
+  ggplot(data, aes(x = Brain_subtype, y = .data[[var_name]], color = Brain_subtype)) +
+    geom_sina(size = 2, alpha = 0.7, na.rm = TRUE) +
+    geom_boxplot(aes(fill = Brain_subtype), width = 0.3, alpha = 0.2, outlier.shape = NA, color = "black",na.rm = TRUE) +
+    scale_color_manual(values = custom_colors) +
+    scale_fill_manual(values = custom_colors) +
+    labs(title = "Baseline NC Group",
+         x = NULL,
+         y = "Baseline MMSE") +
+    scale_x_discrete(labels = c("1" = "Subtype 1", "2" = "Subtype 2", "3" = "Subtype 3")) + 
+    scale_y_continuous(limits = c(10, 35)) +  
+    theme_few() +
+    theme(legend.position = "none",
+          plot.title = element_text(size = 18, face = "bold", margin = margin(b=5), hjust = 0.5),
+          axis.text.x = element_text(size = 18, color = "black", face = "bold"),
+          axis.text.y = element_text(size = 16),  
+          axis.title.x = element_text(size = 18, face = "bold", margin = margin(t=5)), 
+          axis.title.y = element_text(size = 16, face = "bold", margin = margin(r=5)))
+}
+
+plot_mmse <- plot_sina("baseline_MMSE")
+plot_mmse
+
+ggsave("xxxx/MMSE_baseline_NC.png", dpi = 900, width = 8, height = 5, units = "in")
+```
+
+## Demographics in MCI
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+library(ggforce)  
+library(ggthemes)  
+library(emmeans)
+
+# read data
+data <- read.csv("xxxx/cognitive_score_change_rate.csv")
+
+# keep lines where MMSE_rate is not NA to keep sample size consistent
+data <- data[!is.na(data$MMSE_rate), ]
+
+data <- data %>% 
+  filter(baseline_dx == "MCI")
+
+# Ensure Brain_subtype is converted to factor type
+data$Brain_subtype <- as.factor(data$Brain_subtype)
+
+data$Sex <- factor(data$Sex, levels = c(0, 1), labels = c("Male", "Female"))
+
+sex_stats <- data %>% 
+  group_by(Brain_subtype, Sex) %>% 
+  summarize(count = n()) %>% 
+  mutate(percentage = count / sum(count) * 100)
+
+print(sex_stats)
+
+ggplot(sex_stats, aes(x = factor(Brain_subtype), y = percentage, fill = Sex))+
+  geom_bar(stat = "identity", position = "fill") + 
+  scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+  labs(title = "Baseline MCI Group", 
+       x = NULL, 
+       y = "Percentage (%)",
+       fill = "Sex")+
+  scale_x_discrete(labels = c("1" = "Subtype 1", "2" = "Subtype 2", "3" = "Subtype 3")) +
+  scale_fill_manual(values = c("Male" = "skyblue1", "Female" = "pink1")) + 
+  theme_few()+  
+  theme(plot.title = element_text(size = 18, face = "bold", margin = margin(b=10), hjust = 0.5),  
+        axis.text.x = element_text(size = 18, face = "bold", color = "black"),  
+        axis.text.y = element_text(size = 16), 
+        axis.title.y = element_text(size = 18, face = "bold", margin = margin(r=10)))+ 
+  geom_text(aes(label = paste0(round(percentage, 2), "%", "\n", "n = ", count)),
+            position = position_fill(vjust = 0.5), size = 5, color = "gray100",fontface = "bold")  
+
+ggsave("xxxx/Sex.png", dpi = 900, width = 8, height = 5, units = "in")
+
+# define color
+custom_colors <- c("#FFCC00", "#FF6600", "#FF0000")
+
+# ANOVA for Age
+anova_Age <- aov(Age ~ Brain_subtype, data = data)
+print("Age")
+summary(anova_Age)
+
+# post-hoc comparison：Age
+emmeans_Age <- emmeans(anova_Age, ~ Brain_subtype)
+pairs_Age <- pairs(emmeans_Age, adjust = "none")
+print(pairs_Age)
+
+# plot
+ggplot(data, aes(x = Brain_subtype, y = Age)) +
+  geom_sina(aes(color = Brain_subtype), size = 2, alpha = 0.7) +  
+  geom_boxplot(aes(fill = Brain_subtype), width = 0.3, alpha = 0.3, outlier.shape = NA, color = "black") +  
+  scale_color_manual(values = custom_colors) + 
+  scale_fill_manual(values = custom_colors) +  
+  scale_x_discrete(labels = c("1" = "Subtype 1", "2" = "Subtype 2", "3" = "Subtype 3")) +
+  labs(title = "Baseline MCI Group", 
+       x = NULL,
+       y = "Age") +
+  scale_y_continuous(limits = c(45, 100), breaks = seq(50, 100, by = 10)) +  
+  theme_few() + 
+  theme(legend.position = "none", 
+        plot.title = element_text(size = 18, face = "bold", margin = margin(b=5), hjust = 0.5),
+        axis.text.x = element_text(size = 18, face = "bold", margin = margin(t=5), colour = "black"),  
+        axis.text.y = element_text(size = 16), 
+        axis.title.y = element_text(size = 18, face = "bold", margin = margin(r=5)))
+
+ggsave("xxxx/Age.png", dpi = 900, width = 8, height = 5, units = "in")
+
+
+# ANOVA for Education
+anova_Education <- aov(Education ~ Brain_subtype, data = data)
+print("Education")
+summary(anova_Education)
+
+# post-hoc comparison：Education
+emmeans_Education <- emmeans(anova_Education, ~ Brain_subtype)
+pairs_Education <- pairs(emmeans_Education, adjust = "none")
+print(pairs_Education)
+
+# plot
+ggplot(data, aes(x = Brain_subtype, y = Education)) +
+  geom_sina(aes(color = Brain_subtype), size = 2, alpha = 0.7) +  
+  geom_boxplot(aes(fill = Brain_subtype), width = 0.3, alpha = 0.3, outlier.shape = NA, color = "black") +  
+  scale_color_manual(values = custom_colors) + 
+  scale_fill_manual(values = custom_colors) +  
+  scale_x_discrete(labels = c("1" = "Subtype 1", "2" = "Subtype 2", "3" = "Subtype 3")) +
+  labs(title = "Baseline MCI Group",  
+       x = NULL,
+       y = "Years of Education") +
+  scale_y_continuous(limits = c(-1, 25), breaks = seq(0, 25, by = 5)) +  
+  theme_few() +  
+  theme(legend.position = "none",  
+        plot.title = element_text(size = 18, face = "bold", margin = margin(b=5), hjust = 0.5),
+        axis.text.x = element_text(size = 18, face = "bold", margin = margin(t=5), colour = "black"),  
+        axis.text.y = element_text(size = 16), 
+        axis.title.y = element_text(size = 18, face = "bold", margin = margin(r=5)))
+
+ggsave("xxxx/Education.png", dpi = 900, width = 8, height = 5, units = "in")
+
+# ANOVA for linear_risk_score，adjusting Age, Education, and Sex
+anova_linear_risk_score <- aov(linear_risk_score ~ Brain_subtype + Age + Education + Sex, data = data)
+print("Linear_risk_score")
+summary(anova_linear_risk_score)
+
+# post-hoc comparison：linear_risk_score
+emmeans_linear_risk_score <- emmeans(anova_linear_risk_score, ~ Brain_subtype)
+pairs_linear_risk_score <- pairs(emmeans_linear_risk_score, adjust = "none")
+print(pairs_linear_risk_score)
+
+# plot
+ggplot(data, aes(x = Brain_subtype, y = linear_risk_score)) +
+  geom_sina(aes(color = Brain_subtype), size = 2, alpha = 0.7) +  
+  geom_boxplot(aes(fill = Brain_subtype), width = 0.3, alpha = 0.3, outlier.shape = NA, color = "black") + 
+  scale_color_manual(values = custom_colors) + 
+  scale_fill_manual(values = custom_colors) + 
+  scale_x_discrete(labels = c("1" = "Subtype 1", "2" = "Subtype 2", "3" = "Subtype 3")) +
+  labs(title = "Baseline MCI Group",  
+       x = NULL,
+       y = "Risk Score") +
+  scale_y_continuous(limits = c(-7.5, 10), breaks = seq(-5, 10, by = 5)) +  
+  theme_few() + 
+  theme(legend.position = "none",  
+        plot.title = element_text(size = 18, face = "bold", margin = margin(b=5), hjust = 0.5),
+        axis.text.x = element_text(size = 18, face = "bold", margin = margin(t=5), colour = "black"),  
+        axis.text.y = element_text(size = 16),  
+        axis.title.y = element_text(size = 18, face = "bold", margin = margin(r=5)))  
+
+ggsave("xxxx/Linear_risk_score.png", dpi = 900, width = 8, height = 5, units = "in")
+```
